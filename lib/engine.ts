@@ -254,7 +254,7 @@ export function createEngine(
   function snap(k: Side) {
     if (lock) return;
     const h = hist[k];
-    const j = JSON.stringify(fc[k].toJSON(EXTRA));
+    const j = JSON.stringify(fc[k].toObject(EXTRA));
     if (h.s[h.i] === j) return;
     h.s = h.s.slice(0, h.i + 1);
     h.s.push(j);
@@ -264,13 +264,19 @@ export function createEngine(
   }
   function restore(k: Side, i: number) {
     const h = hist[k];
+    const previous = h.i;
     lock = true;
-    h.i = i;
-    fc[k].loadFromJSON(h.s[i], () => {
+    void fc[k].loadFromJSON(h.s[i]).then(() => {
+      h.i = i;
       fc[k].renderAll();
-      lock = false;
       emitHist();
       emitSel();
+    }).catch((error: unknown) => {
+      h.i = previous;
+      console.error(error);
+      ev.current.onError("Could not restore design history");
+    }).finally(() => {
+      lock = false;
     });
   }
 
@@ -433,16 +439,20 @@ export function createEngine(
   const bg = { tol: 25, contig: true, pick: false, busy: false };
   async function applyBg(o: ArtObj) {
     if (!o._key || !o._orig) return;
-    const url = await removeBackground(o._orig, o._key, bg.tol, bg.contig);
-    const dispW = o.getScaledWidth();
-    const c = o.canvas as fabric.Canvas | undefined;
-    (o as unknown as fabric.Image).setSrc(url, () => {
+    try {
+      const url = await removeBackground(o._orig, o._key, bg.tol, bg.contig);
+      const dispW = o.getScaledWidth();
+      const c = o.canvas as fabric.Canvas | undefined;
+      await (o as unknown as fabric.Image).setSrc(url);
       o.scaleToWidth(dispW);
       o.setCoords();
       c?.requestRenderAll();
       if (c) snap(c === fc.front ? "front" : "back");
-    });
-    ev.current.onBgMessage("Background removed. Adjust with the tolerance slider.");
+      ev.current.onBgMessage("Background removed. Adjust with the tolerance slider.");
+    } catch (error) {
+      console.error(error);
+      ev.current.onError("Could not remove the image background");
+    }
   }
   const activeImg = () => { const o = active(); return o && o.type === "image" ? o : null; };
 
@@ -452,7 +462,7 @@ export function createEngine(
       const c = fc[k];
       const o = e.target && e.target.type === "image" ? (e.target as ArtObj) : null;
       if (!o) { ev.current.onToast("Tap on the image"); return; }
-      const p = c.getPointer(e.e, true);
+      const p = c.getScenePoint(e.e);
       const rs = retina(c);
       const px = c.getElement().getContext("2d")!.getImageData(Math.round(p.x * rs), Math.round(p.y * rs), 1, 1).data;
       if (px[3] < 10) { ev.current.onToast("That spot is already transparent"); return; }
@@ -503,16 +513,19 @@ export function createEngine(
     duplicate: () => {
       const o = active(), c = fc[side];
       if (!o) return;
-      o.clone((cl: fabric.Object) => {
+      void o.clone(EXTRA).then((cl) => {
         cl.set({ left: (o.left ?? 0) + 30, top: (o.top ?? 0) + 30 });
         c.discardActiveObject();
         c.add(cl);
         c.setActiveObject(cl);
         c.requestRenderAll();
-      }, EXTRA);
+      }).catch((error: unknown) => {
+        console.error(error);
+        ev.current.onError("Could not duplicate design");
+      });
     },
-    forward: () => { const o = active(); if (o) { fc[side].bringForward(o); snap(side); } },
-    backward: () => { const o = active(); if (o) { fc[side].sendBackwards(o); snap(side); } },
+    forward: () => { const o = active(); if (o) { fc[side].bringObjectForward(o); snap(side); } },
+    backward: () => { const o = active(); if (o) { fc[side].sendObjectBackwards(o); snap(side); } },
     bgAuto: async () => {
       const o = activeImg();
       if (!o || !o._orig) { ev.current.onBgMessage("Select an image in the placement box first."); return; }
@@ -532,13 +545,16 @@ export function createEngine(
       const dispW = o.getScaledWidth();
       const c = o.canvas as fabric.Canvas | undefined;
       o._key = null;
-      (o as unknown as fabric.Image).setSrc(o._orig, () => {
+      void (o as unknown as fabric.Image).setSrc(o._orig).then(() => {
         o.scaleToWidth(dispW);
         o.setCoords();
         c?.requestRenderAll();
         if (c) snap(c === fc.front ? "front" : "back");
+        ev.current.onBgMessage("Original image restored.");
+      }).catch((error: unknown) => {
+        console.error(error);
+        ev.current.onError("Could not restore the original image");
       });
-      ev.current.onBgMessage("Original image restored.");
     },
     bgRetune: (tol, contig) => {
       bg.tol = tol;
