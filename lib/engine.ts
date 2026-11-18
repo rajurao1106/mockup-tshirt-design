@@ -376,9 +376,21 @@ export function createEngine(
   function addImageFile(f: File) {
     if (!/^image\//.test(f.type)) return;
     const r = new FileReader();
-    r.onload = () =>
-      fabric.Image.fromURL(r.result as string, (img) => {
-        (img as ArtObj)._orig = r.result as string;
+    r.onload = async () => {
+      if (typeof r.result !== "string") {
+        ev.current.onError("Image file could not be read");
+        return;
+      }
+      const src = r.result;
+      let img: fabric.Image;
+      try {
+        img = await fabric.Image.fromURL(src);
+      } catch (error) {
+        console.error(error);
+        ev.current.onError("Image failed to load");
+        return;
+      }
+      (img as ArtObj)._orig = src;
         const s = Math.min((CW * 0.7) / (img.width ?? 1), (CH * 0.7) / (img.height ?? 1));
         img.scale(s);
         const c = fc[side];
@@ -387,7 +399,11 @@ export function createEngine(
         c.setActiveObject(img);
         c.renderAll();
         ev.current.onToast("Artwork added");
-      });
+    };
+    r.onerror = () => {
+      console.error(r.error);
+      ev.current.onError("Image file could not be read");
+    };
     r.readAsDataURL(f);
   }
 

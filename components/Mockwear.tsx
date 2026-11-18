@@ -103,7 +103,7 @@ export default function Mockwear() {
       onReady: () => setReady(true),
       onError: setError,
     };
-  });
+  }, [showToast]);
 
   /* create / destroy the 3D + 2D engine */
   useEffect(() => {
