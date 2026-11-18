@@ -359,8 +359,10 @@ export function createEngine(
     wrap(fc.front).style.display = s === "front" ? "" : "none";
     wrap(fc.back).style.display = s === "back" ? "" : "none";
     goCam(s === "front" ? FRONT_AZ : BACK_AZ, null, 0.02);
-    fc.front.discardActiveObject().renderAll();
-    fc.back.discardActiveObject().renderAll();
+    fc.front.discardActiveObject();
+    fc.front.renderAll();
+    fc.back.discardActiveObject();
+    fc.back.renderAll();
     emitHist();
     emitSel();
   }

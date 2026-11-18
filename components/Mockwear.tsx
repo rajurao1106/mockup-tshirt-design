@@ -94,14 +94,16 @@ export default function Mockwear() {
   const events = useRef<EngineEvents>({
     onSelection: () => {}, onHistory: () => {}, onToast: () => {}, onBgMessage: () => {}, onReady: () => {}, onError: () => {},
   });
-  events.current = {
-    onSelection: setSel,
-    onHistory: (u, r) => { setCanUndo(u); setCanRedo(r); },
-    onToast: showToast,
-    onBgMessage: setBgMsg,
-    onReady: () => setReady(true),
-    onError: setError,
-  };
+  useEffect(() => {
+    events.current = {
+      onSelection: setSel,
+      onHistory: (u, r) => { setCanUndo(u); setCanRedo(r); },
+      onToast: showToast,
+      onBgMessage: setBgMsg,
+      onReady: () => setReady(true),
+      onError: setError,
+    };
+  });
 
   /* create / destroy the 3D + 2D engine */
   useEffect(() => {
