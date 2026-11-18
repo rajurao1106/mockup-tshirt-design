@@ -391,14 +391,14 @@ export function createEngine(
         return;
       }
       (img as ArtObj)._orig = src;
-        const s = Math.min((CW * 0.7) / (img.width ?? 1), (CH * 0.7) / (img.height ?? 1));
-        img.scale(s);
-        const c = fc[side];
-        c.add(img);
-        c.centerObject(img);
-        c.setActiveObject(img);
-        c.renderAll();
-        ev.current.onToast("Artwork added");
+      const s = Math.min((CW * 0.7) / (img.width ?? 1), (CH * 0.7) / (img.height ?? 1));
+      img.scale(s);
+      const c = fc[side];
+      c.add(img);
+      c.centerObject(img);
+      c.setActiveObject(img);
+      c.renderAll();
+      ev.current.onToast("Artwork added");
     };
     r.onerror = () => {
       console.error(r.error);
