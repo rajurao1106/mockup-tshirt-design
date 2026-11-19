@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
-import { createEngine, type Engine, type EngineEvents, type SelInfo, type Side } from "@/lib/engine";
+import { CW, createEngine, SIDES, ZONES, type Engine, type EngineEvents, type SelInfo, type Side } from "@/lib/engine";
 import { Icon, type IconName } from "./icons";
 
 type SheetName = "color" | "add" | "edit";
@@ -75,6 +75,7 @@ export default function Mockwear() {
   const [toast, setToast] = useState<string | null>(null);
   const [bgMsg, setBgMsg] = useState("Select an image, then tap Auto remove.");
   const [dragOver, setDragOver] = useState(false);
+  const [placeDragOver, setPlaceDragOver] = useState(false);
 
   // add-text form
   const [txt, setTxt] = useState("Hello");
@@ -154,6 +155,23 @@ export default function Mockwear() {
     Array.from(files).forEach((f) => eng.current?.addImageFile(f));
     setSheet(null);
   };
+  const addFilesAt = (files: FileList | File[], clientX: number, clientY: number) => {
+    const canvasEl = stageRef.current?.querySelector<HTMLElement>(".canvas-container");
+    if (!canvasEl) {
+      addFiles(files);
+      return;
+    }
+    const r = canvasEl.getBoundingClientRect();
+    if (r.width < 20 || r.height < 20) {
+      addFiles(files);
+      return;
+    }
+    const x = ((clientX - r.left) / r.width) * CW;
+    const y = ((clientY - r.top) / r.height) * ZONES[side].ch;
+    Array.from(files).forEach((f) => eng.current?.addImageFile(f, { x, y }));
+    setPrintOn(true);
+    setSheet(null);
+  };
   const exportPng = () => {
     const url = eng.current?.exportPng();
     if (!url) { showToast("Model still loading"); return; }
@@ -215,24 +233,64 @@ export default function Mockwear() {
           )}
           <div className="pointer-events-none absolute bottom-2.5 left-3 text-[11px] text-[#8d8d84]">Drag to rotate · Scroll to zoom</div>
           <div className="pointer-events-none absolute right-3 top-3 rounded-full border border-white/15 bg-black/60 px-2.5 py-[5px] text-[11px] font-semibold uppercase tracking-[.08em] text-white">
-            {side}
+            {ZONES[side].label}
           </div>
         </div>
 
         {/* placement editor */}
         <div
           ref={placeRef}
+          onDragEnter={(e) => {
+            if (Array.from(e.dataTransfer.types).includes("Files")) {
+              e.preventDefault();
+              setPlaceDragOver(true);
+            }
+          }}
+          onDragOver={(e) => {
+            if (Array.from(e.dataTransfer.types).includes("Files")) {
+              e.preventDefault();
+              e.dataTransfer.dropEffect = "copy";
+              setPlaceDragOver(true);
+            }
+          }}
+          onDragLeave={(e) => {
+            if (!e.currentTarget.contains(e.relatedTarget as Node)) setPlaceDragOver(false);
+          }}
+          onDrop={(e) => {
+            e.preventDefault();
+            setPlaceDragOver(false);
+            if (e.dataTransfer.files.length) addFilesAt(e.dataTransfer.files, e.clientX, e.clientY);
+          }}
           className={`relative h-[270px] place-items-center overflow-hidden rounded-[18px] border border-[#2d2d2a] bg-[#121211] lg:h-auto lg:min-h-0 ${
             printOn ? "grid" : "hidden"
           } ${gridOn ? "guides" : ""}`}
         >
-          <svg viewBox="0 0 200 200" preserveAspectRatio="xMidYMid meet" className="pointer-events-none absolute inset-0 size-full fill-none stroke-white p-1.5 opacity-[.07]" strokeWidth={1.2}>
-            <path d="M70 20L20 45l15 40 20-10v105h90V75l20 10 15-40-50-25q-30 20-60 0z" />
-          </svg>
           <div className="pointer-events-none absolute left-3 top-2.5 text-[10px] uppercase tracking-[.16em] text-[#9a9a90]">
-            Placement · {side}
+            Placement · {ZONES[side].label}
           </div>
           <div ref={stageRef} className="relative grid place-items-center" />
+          {placeDragOver && (
+            <div className="pointer-events-none absolute inset-3 z-20 grid place-items-center rounded-[14px] border-2 border-dashed border-white bg-black/75 text-center">
+              <div>
+                <div className="mx-auto mb-2 grid size-10 place-items-center rounded-full bg-white text-xl text-[#111]">+</div>
+                <b className="text-sm text-white">Drop to place on shirt</b>
+              </div>
+            </div>
+          )}
+          <div className="absolute inset-x-2 bottom-2 z-10 flex flex-wrap justify-center gap-1.5">
+            {SIDES.map((k) => (
+              <button
+                key={k}
+                onClick={() => setSide(k)}
+                aria-pressed={side === k}
+                className={`rounded-full px-3 py-1 text-[11px] font-semibold transition ${
+                  side === k ? "bg-white text-[#111]" : "bg-[#242422] text-[#9a9a90] hover:text-[#f1f0ea]"
+                }`}
+              >
+                {ZONES[k].label}
+              </button>
+            ))}
+          </div>
         </div>
 
         <div className={printOn ? "" : "hidden"}>

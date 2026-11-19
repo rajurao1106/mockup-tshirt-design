@@ -5,7 +5,9 @@ import { DecalGeometry } from "three/examples/jsm/geometries/DecalGeometry.js";
 import * as fabric from "fabric";
 import { removeBackground, sampleCornerColor, type RGB } from "./bgRemove";
 
-export type Side = "front" | "back";
+// Every print zone has its own placement canvas + decal on the 3D shirt.
+export const SIDES = ["front", "back"] as const;
+export type Side = (typeof SIDES)[number];
 
 export interface SelInfo {
   kind: "text" | "image";
@@ -33,8 +35,8 @@ export interface Engine {
   setPlain(on: boolean): void;
   setSpin(on: boolean): void;
   fit(): void;
-  addImageFile(f: File): void;
-  addText(text: string, font: string, color: string): void;
+  addImageFile(f: File, at?: { x: number; y: number }): void;
+  addText(text: string, font: string, color: string, at?: { x: number; y: number }): void;
   deleteSelected(): void;
   undo(): void;
   redo(): void;
@@ -57,11 +59,28 @@ export interface Engine {
   dispose(): void;
 }
 
-const DW = 0.2, DH = 0.233; // print area size in model units
 export const CW = 600;
-export const CH = Math.round((CW * DH) / DW);
 const EXTRA = ["_orig", "_key"];
-const FRONT_AZ = 0.08, BACK_AZ = Math.PI + 0.08;
+
+interface ZoneCfg {
+  label: string;
+  dw: number; dh: number; // print area size in model units
+  x: number; y: number;   // where the decal projector is aimed (model units)
+  nx: number; ny: number; nz: number;
+  back: boolean;          // projects onto the back of the shirt
+  tilt: number;           // rotation around Z so sleeve prints follow the sleeve angle
+  az: number;             // camera azimuth that looks at this zone
+  zoom: number | null;    // camera distance (null = keep current)
+  camY: number;
+}
+// Front/back span the full visible torso, while sleeves use their own angled print zones.
+const RAW: Record<Side, ZoneCfg> = {
+  front:       { label: "Front",       dw: 0.36, dh: 0.58, x: 0,     y: -0.04, nx: 0,      ny: 0, nz: 1,  back: false, tilt: 0,      az: 0.08,          zoom: null, camY: 0.02 },
+  back:        { label: "Back",        dw: 0.36, dh: 0.58, x: 0,     y: -0.04, nx: 0,      ny: 0, nz: -1, back: true,  tilt: 0,      az: Math.PI + 0.08, zoom: null, camY: 0.02 },
+};
+export const ZONES = Object.fromEntries(
+  SIDES.map((k) => [k, { ...RAW[k], ch: Math.round((CW * RAW[k].dh) / RAW[k].dw) }]),
+) as Record<Side, ZoneCfg & { ch: number }>;
 
 export function createEngine(
   view: HTMLDivElement,
@@ -182,22 +201,23 @@ export function createEngine(
   const wrap = (c: fabric.Canvas) => (c as unknown as { wrapperEl: HTMLElement }).wrapperEl;
   const retina = (c: fabric.Canvas) => (c as unknown as { getRetinaScaling(): number }).getRetinaScaling();
 
-  const makeEditor = () => {
+  const makeEditor = (k: Side) => {
     const el = document.createElement("canvas");
     stage.appendChild(el);
-    return new fabric.Canvas(el, { width: CW, height: CH, preserveObjectStacking: true });
+    return new fabric.Canvas(el, { width: CW, height: ZONES[k].ch, preserveObjectStacking: true });
   };
-  const fc: Record<Side, fabric.Canvas> = { front: makeEditor(), back: makeEditor() };
-  wrap(fc.back).style.display = "none";
+  const fc = Object.fromEntries(SIDES.map((k) => [k, makeEditor(k)])) as Record<Side, fabric.Canvas>;
+  SIDES.forEach((k) => { if (k !== "front") wrap(fc[k]).style.display = "none"; });
+  const sideOf = (c: fabric.Canvas): Side => SIDES.find((k) => fc[k] === c) ?? "front";
 
   // The visible fabric canvas also contains selection handles, so the 3D texture is
   // fed from a separate offscreen canvas rendered without any controls.
   const TEX_SCALE = 2;
   const tex = {} as Record<Side, THREE.CanvasTexture>;
-  (["front", "back"] as Side[]).forEach((k) => {
+  SIDES.forEach((k) => {
     const cv = document.createElement("canvas");
     cv.width = CW * TEX_SCALE;
-    cv.height = CH * TEX_SCALE;
+    cv.height = ZONES[k].ch * TEX_SCALE;
     const ctx = cv.getContext("2d")!;
     const t = new THREE.CanvasTexture(cv);
     t.colorSpace = THREE.SRGBColorSpace;
@@ -215,35 +235,38 @@ export function createEngine(
   });
 
   let side: Side = "front";
+  let renderShirtRef: () => void = () => {};
   fc.front.add(new fabric.IText("MOCKWEAR", {
-    left: CW / 2, top: CH / 2 - 30, originX: "center", originY: "center",
-    fontFamily: "Impact", fontSize: 96, fill: "#111111",
+    left: CW / 2, top: 200, originX: "center", originY: "center",
+    fontFamily: "Impact", fontSize: 64, fill: "#111111",
   }));
   fc.front.add(new fabric.IText("est. 2026", {
-    left: CW / 2, top: CH / 2 + 60, originX: "center", originY: "center",
-    fontFamily: "Georgia", fontSize: 48, fill: "#e11d48",
+    left: CW / 2, top: 262, originX: "center", originY: "center",
+    fontFamily: "Georgia", fontSize: 32, fill: "#e11d48",
   }));
   fc.front.renderAll();
 
   function fit() {
     const r = place.getBoundingClientRect();
     if (r.width < 60 || r.height < 60) return;
-    const s = Math.min((r.width - 36) / CW, (r.height - 56) / CH);
-    (["front", "back"] as Side[]).forEach((k) =>
+    SIDES.forEach((k) => {
+      const ch = ZONES[k].ch;
+      const s = Math.min((r.width - 36) / CW, (r.height - 76) / ch);
       fc[k].setDimensions(
-        { width: `${Math.floor(CW * s)}px`, height: `${Math.floor(CH * s)}px` },
+        { width: `${Math.floor(CW * s)}px`, height: `${Math.floor(ch * s)}px` },
         { cssOnly: true },
-      ),
-    );
+      );
+    });
+    placeRefImg();
   }
   const roPlace = new ResizeObserver(fit);
   roPlace.observe(place);
 
   /* ---------------- undo / redo ---------------- */
-  const hist: Record<Side, { s: string[]; i: number }> = {
-    front: { s: [], i: -1 },
-    back: { s: [], i: -1 },
-  };
+  const hist = Object.fromEntries(SIDES.map((k) => [k, { s: [] as string[], i: -1 }])) as Record<
+    Side,
+    { s: string[]; i: number }
+  >;
   let lock = false;
   const active = () => fc[side].getActiveObject() as ArtObj | null;
 
@@ -297,7 +320,7 @@ export function createEngine(
   }
   function emitSel() { ev.current.onSelection(readSel()); }
 
-  (["front", "back"] as Side[]).forEach((k) => {
+  SIDES.forEach((k) => {
     snap(k);
     (["object:added", "object:modified", "object:removed", "text:changed"] as const).forEach((n) =>
       fc[k].on(n, () => snap(k)),
@@ -306,6 +329,74 @@ export function createEngine(
       fc[k].on(n, emitSel),
     );
   });
+
+  /* ---------------- shirt reference behind the placement canvas ---------------- */
+  // A real (orthographic) render of the shirt is shown behind the transparent print-area
+  // canvas, so the shirt shape / seams are visible while dragging the design.
+  const IW = { x0: -0.34, x1: 0.34, y0: -0.4, y1: 0.3 }; // world window of the reference image
+  const refImg = document.createElement("img");
+  refImg.alt = "";
+  refImg.draggable = false;
+  Object.assign(refImg.style, { position: "absolute", pointerEvents: "none", display: "none", maxWidth: "none", userSelect: "none" });
+  place.insertBefore(refImg, place.firstChild);
+  const refUrl: Partial<Record<Side, string>> = {};
+  let shirtRoot: THREE.Object3D | null = null;
+  let refRT: THREE.WebGLRenderTarget | null = null;
+
+  function placeRefImg() {
+    const url = refUrl[side];
+    const cr = wrap(fc[side]).getBoundingClientRect();
+    if (!url || cr.width < 10) { refImg.style.display = "none"; return; }
+    const pr = place.getBoundingClientRect();
+    const z = ZONES[side];
+    const ppu = (cr.width - 3) / z.dw; // px per model unit (3px = dashed border)
+    const w = (IW.x1 - IW.x0) * ppu, h = (IW.y1 - IW.y0) * ppu;
+    const cx = cr.left - pr.left - place.clientLeft + cr.width / 2;
+    const cy = cr.top - pr.top - place.clientTop + cr.height / 2;
+    const iy = cy - ((IW.y0 + IW.y1) / 2 - z.y) * ppu;
+    refImg.style.width = `${w}px`;
+    refImg.style.height = `${h}px`;
+    refImg.style.left = `${cx - w / 2}px`;
+    refImg.style.top = `${iy - h / 2}px`;
+    if (refImg.getAttribute("src") !== url) refImg.src = url;
+    refImg.style.display = "block";
+  }
+
+  renderShirtRef = () => {
+    if (!shirtRoot || disposed) return;
+    const W = 1024, H = Math.round((W * (IW.y1 - IW.y0)) / (IW.x1 - IW.x0));
+    if (!refRT) refRT = new THREE.WebGLRenderTarget(W, H, { colorSpace: THREE.SRGBColorSpace });
+    const cam = new THREE.OrthographicCamera(IW.x0, IW.x1, IW.y1, IW.y0, 0.1, 6);
+    const hidden: THREE.Object3D[] = [];
+    scene.children.forEach((o) => { if ((o as THREE.Mesh).isMesh && o.visible) { o.visible = false; hidden.push(o); } });
+    const keyZ = key.position.z;
+    const buf = new Uint8Array(W * H * 4);
+    SIDES.forEach((k) => {
+      const bk = ZONES[k].back;
+      cam.position.set(0, 0, bk ? -2 : 2);
+      cam.lookAt(0, 0, 0);
+      cam.updateMatrixWorld(true);
+      key.position.z = bk ? -3 : 3;
+      renderer.setRenderTarget(refRT);
+      renderer.render(scene, cam);
+      renderer.readRenderTargetPixels(refRT!, 0, 0, W, H, buf);
+      renderer.setRenderTarget(null);
+      const tmp = document.createElement("canvas");
+      tmp.width = W; tmp.height = H;
+      tmp.getContext("2d")!.putImageData(new ImageData(new Uint8ClampedArray(buf), W, H), 0, 0);
+      const out = document.createElement("canvas");
+      out.width = W; out.height = H;
+      const g = out.getContext("2d")!;
+      g.translate(0, H);
+      g.scale(1, -1);
+      g.filter = "brightness(1.18)";
+      g.drawImage(tmp, 0, 0);
+      refUrl[k] = out.toDataURL("image/png");
+    });
+    key.position.z = keyZ;
+    hidden.forEach((o) => { o.visible = true; });
+    placeRefImg();
+  };
 
   /* ---------------- load the 3D shirt ---------------- */
   let shirtMat: THREE.MeshStandardMaterial | null = null;
@@ -330,16 +421,20 @@ export function createEngine(
       shirtMat.aoMapIntensity = 0.12;
       scene.add(gltf.scene);
       gltf.scene.updateMatrixWorld(true);
+      shirtRoot = gltf.scene;
 
       const addDecal = (k: Side) => {
-        const back = k === "back", y = 0.03;
+        const z = ZONES[k];
         const ray = new THREE.Raycaster(
-          new THREE.Vector3(0, y, back ? -1 : 1),
-          new THREE.Vector3(0, 0, back ? 1 : -1),
+          new THREE.Vector3(z.x + z.nx * 1.2, z.y + z.ny * 1.2, z.nz * 1.2),
+          new THREE.Vector3(-z.nx, -z.ny, -z.nz),
         );
         const hit = ray.intersectObject(shirt)[0];
-        const p = hit ? hit.point : new THREE.Vector3(0, y, back ? -0.117 : 0.133);
-        const geo = new DecalGeometry(shirt, p, new THREE.Euler(0, back ? Math.PI : 0, 0), new THREE.Vector3(DW, DH, 0.1));
+        const p = hit ? hit.point : new THREE.Vector3(z.x, z.y, z.back ? -0.117 : 0.133);
+        const rotY = k === "back" ? Math.PI : 0;
+        const geo = new DecalGeometry(
+          shirt, p, new THREE.Euler(0, rotY, z.tilt), new THREE.Vector3(z.dw, z.dh, 0.2),
+        );
         const m = new THREE.Mesh(
           geo,
           new THREE.MeshStandardMaterial({
@@ -351,8 +446,8 @@ export function createEngine(
         decals.push(m);
         scene.add(m);
       };
-      addDecal("front");
-      addDecal("back");
+      SIDES.forEach((k) => addDecal(k));
+      renderShirtRef();
       ev.current.onReady();
     },
     undefined,
@@ -362,13 +457,13 @@ export function createEngine(
   /* ---------------- public actions ---------------- */
   function setSide(s: Side) {
     side = s;
-    wrap(fc.front).style.display = s === "front" ? "" : "none";
-    wrap(fc.back).style.display = s === "back" ? "" : "none";
-    goCam(s === "front" ? FRONT_AZ : BACK_AZ, null, 0.02);
-    fc.front.discardActiveObject();
-    fc.front.renderAll();
-    fc.back.discardActiveObject();
-    fc.back.renderAll();
+    SIDES.forEach((k) => {
+      wrap(fc[k]).style.display = k === s ? "" : "none";
+      fc[k].discardActiveObject();
+      fc[k].renderAll();
+    });
+    goCam(ZONES[s].az, ZONES[s].zoom, ZONES[s].camY);
+    placeRefImg();
     emitHist();
     emitSel();
   }
@@ -376,10 +471,10 @@ export function createEngine(
   function setColor(hex: string) {
     curColor = hex;
     shirtMat?.color.set(hex);
-    stage.querySelectorAll<HTMLElement>(".canvas-container").forEach((e) => { e.style.background = hex; });
+    renderShirtRef();
   }
 
-  function addImageFile(f: File) {
+  function addImageFile(f: File, at?: { x: number; y: number }) {
     if (!/^image\//.test(f.type)) return;
     const r = new FileReader();
     r.onload = async () => {
@@ -397,11 +492,17 @@ export function createEngine(
         return;
       }
       (img as ArtObj)._orig = src;
-      const s = Math.min((CW * 0.7) / (img.width ?? 1), (CH * 0.7) / (img.height ?? 1));
+      const s = Math.min((CW * 0.45) / (img.width ?? 1), (ZONES[side].ch * 0.45) / (img.height ?? 1));
       img.scale(s);
       const c = fc[side];
       c.add(img);
-      c.centerObject(img);
+      img.set({
+        left: at ? Math.max(0, Math.min(CW, at.x)) : CW / 2,
+        top: at ? Math.max(0, Math.min(ZONES[side].ch, at.y)) : ZONES[side].ch / 2,
+        originX: "center",
+        originY: "center",
+      });
+      img.setCoords();
       c.setActiveObject(img);
       c.renderAll();
       ev.current.onToast("Artwork added");
@@ -413,11 +514,14 @@ export function createEngine(
     r.readAsDataURL(f);
   }
 
-  function addText(text: string, font: string, color: string) {
+  function addText(text: string, font: string, color: string, at?: { x: number; y: number }) {
     const c = fc[side];
     const t = new fabric.IText(text || "Text", {
-      left: CW / 2, top: CH / 2, originX: "center", originY: "center",
-      fontFamily: font, fontSize: 90, fill: color,
+      left: at ? Math.max(0, Math.min(CW, at.x)) : CW / 2,
+      top: at ? Math.max(0, Math.min(ZONES[side].ch, at.y)) : ZONES[side].ch / 2,
+      originX: "center",
+      originY: "center",
+      fontFamily: font, fontSize: 60, fill: color,
     });
     c.add(t);
     c.setActiveObject(t);
@@ -447,7 +551,7 @@ export function createEngine(
       o.scaleToWidth(dispW);
       o.setCoords();
       c?.requestRenderAll();
-      if (c) snap(c === fc.front ? "front" : "back");
+      if (c) snap(sideOf(c));
       ev.current.onBgMessage("Background removed. Adjust with the tolerance slider.");
     } catch (error) {
       console.error(error);
@@ -456,7 +560,7 @@ export function createEngine(
   }
   const activeImg = () => { const o = active(); return o && o.type === "image" ? o : null; };
 
-  (["front", "back"] as Side[]).forEach((k) =>
+  SIDES.forEach((k) =>
     fc[k].on("mouse:down", (e) => {
       if (!bg.pick) return;
       const c = fc[k];
@@ -488,7 +592,7 @@ export function createEngine(
 
   return {
     setSide,
-    resetView: () => goCam(side === "front" ? FRONT_AZ : BACK_AZ, 1.9, 0.02),
+    resetView: () => goCam(ZONES[side].az, ZONES[side].zoom ?? 1.9, ZONES[side].camY),
     setColor,
     setPlain: (on) => { plain = on; decals.forEach((m) => (m.visible = !on)); },
     setSpin: (on) => { controls.autoRotate = on; },
@@ -549,7 +653,7 @@ export function createEngine(
         o.scaleToWidth(dispW);
         o.setCoords();
         c?.requestRenderAll();
-        if (c) snap(c === fc.front ? "front" : "back");
+        if (c) snap(sideOf(c));
         ev.current.onBgMessage("Original image restored.");
       }).catch((error: unknown) => {
         console.error(error);
@@ -565,13 +669,15 @@ export function createEngine(
       requestAnimationFrame(async () => { await applyBg(o); bg.busy = false; });
     },
     dispose: () => {
-      disposed = true;``
+      disposed = true;
       cancelAnimationFrame(raf);
       roView.disconnect();
       roPlace.disconnect();
       controls.dispose();
-      (["front", "back"] as Side[]).forEach((k) => { tex[k].dispose(); fc[k].dispose(); });
+      SIDES.forEach((k) => { tex[k].dispose(); fc[k].dispose(); });
       stage.replaceChildren();
+      refImg.remove();
+      refRT?.dispose();
       renderer.dispose();
       renderer.domElement.remove();
     },
