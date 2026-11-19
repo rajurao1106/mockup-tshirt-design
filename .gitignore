@@ -39,3 +39,8 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+# Keep the shareable template in git, but ignore local environment secrets.
+.env
+.env.local
+.env.*.local
+!.env.example

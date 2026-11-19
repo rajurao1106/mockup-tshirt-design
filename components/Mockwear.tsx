@@ -1,24 +1,32 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import Link from "next/link";
 import { CW, createEngine, SIDES, ZONES, type Engine, type EngineEvents, type SelInfo, type Side } from "@/lib/engine";
+import { DESIGN_CATEGORIES, type CatalogDesign } from "@/lib/designCatalog";
 import { Icon, type IconName } from "./icons";
 
-type SheetName = "color" | "add" | "edit";
-type ToolName = SheetName | "print" | "flip" | "plain" | "spin";
+type SheetName = "color" | "add" | "edit" | "order";
+type ToolName = SheetName | "designs" | "print" | "flip" | "plain" | "spin";
 
 const SWATCHES = ["#efede8", "#1a1a1a", "#3d3d3a", "#e11d48", "#2563eb", "#16a34a", "#f59e0b", "#7c3aed", "#9ca3af", "#0f766e"];
 const FONTS = ["Impact", "Georgia", "Courier New", "Arial", "Trebuchet MS"];
 const TOOLS: { name: ToolName; label: string; icon: IconName }[] = [
   { name: "color", label: "Color", icon: "color" },
   { name: "add", label: "Add", icon: "add" },
+  { name: "designs", label: "Designs", icon: "add" },
   { name: "print", label: "Print", icon: "print" },
   { name: "edit", label: "Edit", icon: "edit" },
   { name: "flip", label: "Flip", icon: "flip" },
   { name: "plain", label: "Plain", icon: "plain" },
   { name: "spin", label: "Spin", icon: "spin" },
 ];
-const SHEET_TITLE: Record<SheetName, string> = { color: "Shirt color", add: "Add design", edit: "Edit selected" };
+const SHEET_TITLE: Record<SheetName, string> = {
+  color: "Shirt color",
+  add: "Add design",
+  edit: "Edit selected",
+  order: "Confirm mockup order",
+};
 
 /* ---------- small UI helpers ---------- */
 const btn =
@@ -76,6 +84,10 @@ export default function Mockwear() {
   const [bgMsg, setBgMsg] = useState("Select an image, then tap Auto remove.");
   const [dragOver, setDragOver] = useState(false);
   const [placeDragOver, setPlaceDragOver] = useState(false);
+  const [catalog, setCatalog] = useState<CatalogDesign[]>([]);
+  const [catalogCategory, setCatalogCategory] = useState<string>("All");
+  const [catalogLoading, setCatalogLoading] = useState(true);
+  const [catalogError, setCatalogError] = useState("");
 
   // add-text form
   const [txt, setTxt] = useState("Hello");
@@ -84,6 +96,13 @@ export default function Mockwear() {
   // background-remove options
   const [tol, setTol] = useState(25);
   const [contig, setContig] = useState(true);
+  const [orderName, setOrderName] = useState("");
+  const [orderPhone, setOrderPhone] = useState("");
+  const [orderAddress, setOrderAddress] = useState("");
+  const [orderSize, setOrderSize] = useState("M");
+  const [orderQty, setOrderQty] = useState("1");
+  const [fulfillment, setFulfillment] = useState<"delivery" | "pickup">("delivery");
+  const [orderBusy, setOrderBusy] = useState(false);
 
   const showToast = useCallback((m: string) => {
     setToast(m);
@@ -118,6 +137,22 @@ export default function Mockwear() {
   useEffect(() => { eng.current?.setColor(color); }, [color]);
   useEffect(() => { eng.current?.setPlain(plain); }, [plain]);
   useEffect(() => { eng.current?.setSpin(spin); }, [spin]);
+  useEffect(() => {
+    let active = true;
+    void fetch("/api/designs", { cache: "no-store" })
+      .then(async (response) => {
+        const result = await response.json() as { designs?: CatalogDesign[]; error?: string };
+        if (!response.ok) throw new Error(result.error ?? "Design library could not be loaded");
+        if (active) setCatalog(result.designs ?? []);
+      })
+      .catch((reason: unknown) => {
+        if (active) setCatalogError(reason instanceof Error ? reason.message : "Design library could not be loaded");
+      })
+      .finally(() => {
+        if (active) setCatalogLoading(false);
+      });
+    return () => { active = false; };
+  }, []);
 
   /* Delete key + paste image */
   useEffect(() => {
@@ -142,14 +177,17 @@ export default function Mockwear() {
     setSheet(n);
   };
   const onTool = (n: ToolName) => {
-    if (n === "color" || n === "add" || n === "edit") openSheet(n);
+    if (n === "designs") {
+      setSheet(null);
+      document.getElementById("design-library")?.scrollIntoView({ behavior: "smooth", block: "start" });
+    } else if (n === "color" || n === "add" || n === "edit") openSheet(n);
     else if (n === "print") setPrintOn((v) => !v);
     else if (n === "flip") setSide((s) => (s === "front" ? "back" : "front"));
     else if (n === "plain") { setPlain((v) => { showToast(!v ? "Plain shirt (design hidden)" : "Design shown"); return !v; }); }
     else if (n === "spin") setSpin((v) => !v);
   };
   const isOn = (n: ToolName) =>
-    n === "print" ? printOn : n === "plain" ? plain : n === "spin" ? spin : n === "flip" ? false : sheet === n;
+    n === "print" ? printOn : n === "plain" ? plain : n === "spin" ? spin : n === "flip" || n === "designs" ? false : sheet === n;
 
   const addFiles = (files: FileList | File[]) => {
     Array.from(files).forEach((f) => eng.current?.addImageFile(f));
@@ -181,7 +219,108 @@ export default function Mockwear() {
     a.click();
     showToast("PNG downloaded");
   };
+  const openOrderSheet = () => setSheet("order");
+  const dataUrlToBlob = async (dataUrl: string) => {
+    const res = await fetch(dataUrl);
+    return res.blob();
+  };
+  const sendWhatsAppOrder = async () => {
+    const name = orderName.trim();
+    const phone = orderPhone.trim();
+    const quantity = Number(orderQty);
+    if (!name || !phone) {
+      showToast("Name aur phone number zaroori hain");
+      return;
+    }
+    if (fulfillment === "delivery" && !orderAddress.trim()) {
+      showToast("Delivery address zaroori hai");
+      return;
+    }
+    if (!Number.isInteger(quantity) || quantity < 1) {
+      showToast("Quantity valid number mein bharein");
+      return;
+    }
+    const mockup = eng.current?.exportPng();
+    if (!mockup) {
+      showToast("Mockup abhi ready nahi hai");
+      return;
+    }
+
+    setOrderBusy(true);
+    try {
+      let imageUrl = "";
+      const cloudName = process.env.NEXT_PUBLIC_CLOUDINARY_CLOUD_NAME;
+      const uploadPreset = process.env.NEXT_PUBLIC_CLOUDINARY_UPLOAD_PRESET;
+      if (cloudName && uploadPreset) {
+        const form = new FormData();
+        form.append("file", await dataUrlToBlob(mockup), `mockwear-${Date.now()}.png`);
+        form.append("upload_preset", uploadPreset);
+        const uploaded = await fetch(`https://api.cloudinary.com/v1_1/${cloudName}/image/upload`, {
+          method: "POST",
+          body: form,
+        });
+        const result = await uploaded.json() as { secure_url?: string; error?: { message?: string } };
+        if (!uploaded.ok) {
+          throw new Error(result.error?.message ?? `Cloudinary upload failed (${uploaded.status})`);
+        }
+        imageUrl = result.secure_url ?? "";
+      }
+
+      if (!imageUrl) {
+        showToast("Cloudinary preset configure nahi hai");
+      }
+
+      const addressLine = fulfillment === "delivery"
+        ? `Delivery address: ${orderAddress.trim()}`
+        : "Fulfillment: Customer shop visit / pickup";
+      const message = [
+        "New T-Shirt Mockup Order",
+        `Name: ${name}`,
+        `Phone: ${phone}`,
+        `Size: ${orderSize}`,
+        `Quantity: ${quantity}`,
+        `Shirt color: ${color}`,
+        `View: ${ZONES[side].label}`,
+        addressLine,
+        imageUrl ? `Mockup image: ${imageUrl}` : "Mockup image: please find the downloaded PNG",
+        "Please call the customer to confirm price, print, and delivery/pickup.",
+      ].join("\n");
+      const ownerPhone = (process.env.NEXT_PUBLIC_OWNER_WHATSAPP ?? "917470578448").replace(/\D/g, "");
+      window.open(`https://wa.me/${ownerPhone}?text=${encodeURIComponent(message)}`, "_blank", "noopener,noreferrer");
+      setSheet(null);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "";
+      if (message.includes("whitelisted for unsigned uploads")) {
+        showToast("Preset unsigned whitelist nahi hai. Cloudinary Settings > Upload presets mein preset Unsigned karein.");
+      } else {
+        showToast(`Cloudinary error: ${message || "Image upload failed"}`);
+      }
+    } finally {
+      setOrderBusy(false);
+    }
+  };
   const pickColor = (c: string) => setColor(c);
+  const addCatalogDesign = async (design: CatalogDesign) => {
+    try {
+      const response = await fetch(design.imageUrl);
+      if (!response.ok) throw new Error("Artwork could not be downloaded");
+      const blob = await response.blob();
+      const ext = blob.type === "image/webp" ? "webp" : blob.type === "image/jpeg" ? "jpg" : "png";
+      eng.current?.addImageFile(new File([blob], `${design.id}.${ext}`, { type: blob.type || "image/png" }));
+      setPrintOn(true);
+      setSheet(null);
+      showToast(`${design.title} added to ${ZONES[side].label}`);
+    } catch (reason) {
+      showToast(reason instanceof Error ? reason.message : "Artwork could not be added");
+    }
+  };
+  const filteredCatalog = catalogCategory === "All"
+    ? catalog
+    : catalog.filter((design) => design.category === catalogCategory);
+  const availableCategories = DESIGN_CATEGORIES.filter((category) =>
+    catalog.some((design) => design.category === category),
+  );
+  const popularDesigns = catalog.filter((design) => design.popular);
 
   /* ---------- render ---------- */
   return (
@@ -216,6 +355,13 @@ export default function Mockwear() {
             <IconBtn title="Redo" onClick={() => eng.current?.redo()} disabled={!canRedo}><Icon name="redo" /></IconBtn>
             <IconBtn title="Guides" onClick={() => setGridOn((v) => !v)} on={gridOn}><Icon name="grid" /></IconBtn>
             <IconBtn title="Download PNG" onClick={exportPng}><Icon name="share" /></IconBtn>
+            <button
+              title="Confirm order"
+              onClick={openOrderSheet}
+              className="rounded-full bg-[#25D366] px-3.5 text-[12px] font-bold text-[#102015] transition hover:bg-[#36df78]"
+            >
+              WhatsApp Order
+            </button>
           </div>
         </div>
 
@@ -432,11 +578,87 @@ export default function Mockwear() {
                 )}
               </div>
             )}
+
+            {sheet === "order" && (
+              <div className="space-y-3">
+                <p className="text-xs leading-relaxed text-[#aaa99f]">
+                  Details submit karein. Final design Cloudinary link ke saath owner ko WhatsApp par bheja jayega. Owner call confirmation ke baad delivery ya shop pickup confirm karega.
+                </p>
+                <div className="grid gap-2 sm:grid-cols-2">
+                  <input
+                    className={input}
+                    value={orderName}
+                    onChange={(e) => setOrderName(e.target.value)}
+                    placeholder="Customer name"
+                    autoComplete="name"
+                  />
+                  <input
+                    className={input}
+                    value={orderPhone}
+                    onChange={(e) => setOrderPhone(e.target.value)}
+                    placeholder="WhatsApp number"
+                    inputMode="tel"
+                    autoComplete="tel"
+                  />
+                  <select className={input} value={orderSize} onChange={(e) => setOrderSize(e.target.value)}>
+                    {["S", "M", "L", "XL", "XXL", "3XL"].map((s) => <option key={s}>{s}</option>)}
+                  </select>
+                  <input
+                    className={input}
+                    value={orderQty}
+                    onChange={(e) => setOrderQty(e.target.value)}
+                    placeholder="Quantity"
+                    inputMode="numeric"
+                  />
+                </div>
+
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setFulfillment("delivery")}
+                    className={`rounded-[10px] border px-3 py-2.5 text-xs font-semibold ${fulfillment === "delivery" ? "border-white bg-white text-[#111]" : "border-[#3a3a36] bg-[#242422] text-[#d8d8d0]"}`}
+                  >
+                    Home delivery
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setFulfillment("pickup")}
+                    className={`rounded-[10px] border px-3 py-2.5 text-xs font-semibold ${fulfillment === "pickup" ? "border-white bg-white text-[#111]" : "border-[#3a3a36] bg-[#242422] text-[#d8d8d0]"}`}
+                  >
+                    Visit shop
+                  </button>
+                </div>
+
+                {fulfillment === "delivery" && (
+                  <textarea
+                    className={`${input} min-h-[72px] w-full resize-none`}
+                    value={orderAddress}
+                    onChange={(e) => setOrderAddress(e.target.value)}
+                    placeholder="Full delivery address, landmark, and PIN code"
+                    autoComplete="street-address"
+                  />
+                )}
+
+                <div className="rounded-[12px] border border-[#3a3a36] bg-[#171715] p-3 text-xs text-[#aaa99f]">
+                  <div className="flex justify-between gap-3"><span>Selected side</span><b className="text-[#f1f0ea]">{ZONES[side].label}</b></div>
+                  <div className="mt-1.5 flex justify-between gap-3"><span>Shirt color</span><b className="font-mono text-[#f1f0ea]">{color}</b></div>
+                </div>
+
+                <button
+                  type="button"
+                  disabled={orderBusy}
+                  onClick={() => void sendWhatsAppOrder()}
+                  className="h-[48px] w-full rounded-[12px] bg-[#25D366] text-sm font-bold text-[#102015] transition disabled:cursor-wait disabled:opacity-60"
+                >
+                  {orderBusy ? "Uploading mockup..." : "Send order on WhatsApp"}
+                </button>
+              </div>
+            )}
           </div>
         )}
 
         {/* toolbar */}
-        <nav className="grid grid-cols-7 gap-1 rounded-[18px] border border-[#2d2d2a] bg-[#181816] p-1.5 lg:col-span-full lg:w-full lg:max-w-[620px] lg:justify-self-center">
+        <nav className="grid grid-cols-8 gap-1 rounded-[18px] border border-[#2d2d2a] bg-[#181816] p-1.5 lg:col-span-full lg:w-full lg:max-w-[720px] lg:justify-self-center">
           {TOOLS.map((t) => (
             <button
               key={t.name}
@@ -450,6 +672,120 @@ export default function Mockwear() {
             </button>
           ))}
         </nav>
+      </section>
+
+      <section
+        id="design-library"
+        className="mx-auto mt-10 max-w-[1120px] scroll-mt-6 rounded-[24px] border border-[#deddd4] bg-white p-5 shadow-[0_16px_50px_-35px_#30302066] sm:p-7 lg:mt-14"
+      >
+        <div className="flex flex-wrap items-end justify-between gap-4">
+          <div>
+            <p className="text-[10px] font-bold uppercase tracking-[.2em] text-[#75805e]">Design library</p>
+            <h2 className="mt-1 text-2xl font-bold tracking-tight sm:text-3xl">Pick a design for your shirt</h2>
+            <p className="mt-1 text-sm text-[#77776e]">Tap any artwork to add it to the selected shirt side.</p>
+          </div>
+          <Link href="/admin" className="rounded-full border border-[#deddd4] px-4 py-2 text-xs font-semibold text-[#4d6a1f] transition hover:border-[#4d6a1f]">
+            Admin upload
+          </Link>
+        </div>
+
+        {catalogLoading && <p className="mt-6 text-sm text-[#77776e]">Loading designs...</p>}
+        {catalogError && <p role="alert" className="mt-6 rounded-xl bg-red-50 px-4 py-3 text-sm text-red-700">{catalogError}</p>}
+        {!catalogLoading && !catalogError && catalog.length === 0 && (
+          <div className="mt-6 rounded-xl border border-dashed border-[#d6d5cd] px-4 py-10 text-center">
+            <p className="text-sm font-semibold">No designs available yet</p>
+            <p className="mt-1 text-xs text-[#77776e]">Admin se upload kiye designs yahan category-wise dikhengay.</p>
+          </div>
+        )}
+        {!catalogLoading && !catalogError && catalog.length > 0 && (
+          <>
+            <div className="mt-6 flex gap-2 overflow-x-auto pb-1">
+              {["All", ...availableCategories].map((item) => (
+                <button
+                  key={item}
+                  type="button"
+                  onClick={() => setCatalogCategory(item)}
+                  className={`shrink-0 rounded-full px-4 py-2 text-xs font-semibold transition ${
+                    catalogCategory === item ? "bg-[#171713] text-white" : "border border-[#e2e1d9] text-[#66665d] hover:border-[#99998f]"
+                  }`}
+                >
+                  {item}
+                </button>
+              ))}
+            </div>
+
+            <div className="mt-7 space-y-8">
+              {catalogCategory === "All"
+                ? availableCategories.map((category) => {
+                  const categoryDesigns = catalog.filter((design) => design.category === category);
+                  return (
+                    <section key={category}>
+                      <h3 className="mb-3 text-sm font-bold">{category}</h3>
+                      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
+                        {categoryDesigns.map((design) => (
+                          <button
+                            key={design.id}
+                            type="button"
+                            onClick={() => void addCatalogDesign(design)}
+                            className="overflow-hidden rounded-[16px] border border-[#e7e6df] bg-white text-left transition hover:-translate-y-0.5 hover:border-[#858c71] hover:shadow-md"
+                          >
+                            {/* eslint-disable-next-line @next/next/no-img-element */}
+                            <img src={design.imageUrl} alt={design.title} className="aspect-square w-full bg-[#f5f4ef] object-contain p-4" />
+                            <span className="block truncate px-3 py-2.5 text-xs font-semibold">{design.title}</span>
+                          </button>
+                        ))}
+                      </div>
+                    </section>
+                  );
+                })
+                : (
+                  <section>
+                    <h3 className="mb-3 text-sm font-bold">{catalogCategory}</h3>
+                    <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
+                      {filteredCatalog.map((design) => (
+                        <button
+                          key={design.id}
+                          type="button"
+                          onClick={() => void addCatalogDesign(design)}
+                          className="overflow-hidden rounded-[16px] border border-[#e7e6df] bg-white text-left transition hover:-translate-y-0.5 hover:border-[#858c71] hover:shadow-md"
+                        >
+                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                          <img src={design.imageUrl} alt={design.title} className="aspect-square w-full bg-[#f5f4ef] object-contain p-4" />
+                          <span className="block truncate px-3 py-2.5 text-xs font-semibold">{design.title}</span>
+                        </button>
+                      ))}
+                    </div>
+                  </section>
+                )}
+              {catalogCategory === "All" && availableCategories.length === 0 && (
+                <p className="text-sm text-[#77776e]">Uploaded designs do not have a recognized category.</p>
+              )}
+            </div>
+
+            {popularDesigns.length > 0 && (
+              <section className="mt-9 border-t border-[#e8e7e0] pt-6">
+                <div className="mb-3 flex items-center gap-2">
+                  <h3 className="text-sm font-bold">Popular designs</h3>
+                  <span className="rounded-full bg-[#f2f3ed] px-2 py-1 text-[9px] font-bold uppercase tracking-wider text-[#68764b]">Trending</span>
+                </div>
+                <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
+                  {popularDesigns.map((design) => (
+                    <button
+                      key={design.id}
+                      type="button"
+                      onClick={() => void addCatalogDesign(design)}
+                      className="overflow-hidden rounded-[16px] border border-[#e7e6df] bg-white text-left transition hover:-translate-y-0.5 hover:border-[#858c71] hover:shadow-md"
+                    >
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img src={design.imageUrl} alt={design.title} className="aspect-square w-full bg-[#f5f4ef] object-contain p-4" />
+                      <span className="block truncate px-3 py-2.5 text-xs font-semibold">{design.title}</span>
+                    </button>
+                  ))}
+                </div>
+              </section>
+            )}
+          </>
+        )}
       </section>
 
       <div
