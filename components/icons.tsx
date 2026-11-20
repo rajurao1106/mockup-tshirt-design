@@ -6,6 +6,7 @@ const paths: Record<string, ReactNode> = {
   redo: <path d="M15 14l5-5-5-5M20 9H10a6 6 0 000 12h3" />,
   grid: <path d="M3 3h18v18H3zM3 9h18M3 15h18M9 3v18M15 3v18" />,
   share: <path d="M12 3v12M7 8l5-5 5 5M5 13v7h14v-7" />,
+  save: <path d="M5 3h12l4 4v14H3V3h2zM7 3v6h10V3M7 21v-8h10v8" />,
   color: (
     <>
       <path d="M12 3a9 9 0 100 18c1.5 0 2.1-1.1 1.6-2.3-.5-1.3.4-2.4 1.7-2.4H17a4 4 0 004-4c0-5-4.1-9.3-9-9.3z" />

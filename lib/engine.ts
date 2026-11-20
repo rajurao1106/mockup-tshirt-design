@@ -9,6 +9,13 @@ import { removeBackground, sampleCornerColor, type RGB } from "./bgRemove";
 export const SIDES = ["front", "back"] as const;
 export type Side = (typeof SIDES)[number];
 
+export interface EngineProject {
+  side: Side;
+  color: string;
+  front: string;
+  back: string;
+}
+
 export interface SelInfo {
   kind: "text" | "image";
   text: string;
@@ -26,7 +33,13 @@ export interface EngineEvents {
   onError(msg: string): void;
 }
 
-type ArtObj = fabric.Object & { _orig?: string; _key?: RGB | null };
+type ArtObj = fabric.Object & { _orig?: string; _key?: RGB | null; _fileName?: string };
+
+export interface OriginalArtwork {
+  side: Side;
+  fileName: string;
+  dataUrl: string;
+}
 
 export interface Engine {
   setSide(s: Side): void;
@@ -52,6 +65,10 @@ export interface Engine {
   duplicate(): void;
   forward(): void;
   backward(): void;
+  getOriginalImages(): OriginalArtwork[];
+  exportSideViews(): Record<Side, string> | null;
+  exportProject(): EngineProject;
+  loadProject(project: EngineProject): Promise<void>;
   bgAuto(): Promise<void>;
   bgPick(): void;
   bgReset(): void;
@@ -60,7 +77,7 @@ export interface Engine {
 }
 
 export const CW = 600;
-const EXTRA = ["_orig", "_key"];
+const EXTRA = ["_orig", "_key", "_fileName"];
 
 interface ZoneCfg {
   label: string;
@@ -236,7 +253,7 @@ export function createEngine(
 
   let side: Side = "front";
   let renderShirtRef: () => void = () => {};
-  fc.front.add(new fabric.IText("MOCKWEAR", {
+  fc.front.add(new fabric.IText("YOUR DESIGN", {
     left: CW / 2, top: 200, originX: "center", originY: "center",
     fontFamily: "Impact", fontSize: 64, fill: "#111111",
   }));
@@ -474,6 +491,23 @@ export function createEngine(
     renderShirtRef();
   }
 
+  async function loadProject(project: EngineProject) {
+    lock = true;
+    try {
+      await Promise.all(SIDES.map((k) => fc[k].loadFromJSON(project[k])));
+      setColor(project.color);
+      SIDES.forEach((k) => {
+        fc[k].discardActiveObject();
+        fc[k].renderAll();
+        hist[k].s = [JSON.stringify(fc[k].toObject(EXTRA))];
+        hist[k].i = 0;
+      });
+      setSide(project.side);
+    } finally {
+      lock = false;
+    }
+  }
+
   function addImageFile(f: File, at?: { x: number; y: number }) {
     if (!/^image\//.test(f.type)) return;
     const r = new FileReader();
@@ -492,6 +526,7 @@ export function createEngine(
         return;
       }
       (img as ArtObj)._orig = src;
+      (img as ArtObj)._fileName = f.name;
       const s = Math.min((CW * 0.45) / (img.width ?? 1), (ZONES[side].ch * 0.45) / (img.height ?? 1));
       img.scale(s);
       const c = fc[side];
@@ -630,6 +665,61 @@ export function createEngine(
     },
     forward: () => { const o = active(); if (o) { fc[side].bringObjectForward(o); snap(side); } },
     backward: () => { const o = active(); if (o) { fc[side].sendObjectBackwards(o); snap(side); } },
+    getOriginalImages: () => {
+      const seen: Record<Side, Set<string>> = { front: new Set(), back: new Set() };
+      const images: OriginalArtwork[] = [];
+      SIDES.forEach((k) => {
+        fc[k].getObjects().forEach((object) => {
+          const image = object as ArtObj;
+          if (image.type !== "image" || !image._orig || seen[k].has(image._orig)) return;
+          seen[k].add(image._orig);
+          const mimeSubtype = /^data:image\/([^;,]+)/i.exec(image._orig)?.[1]?.replace("jpeg", "jpg") ?? "png";
+          images.push({
+            side: k,
+            fileName: image._fileName || `artwork-${images.length + 1}.${mimeSubtype}`,
+            dataUrl: image._orig,
+          });
+        });
+      });
+      return images;
+    },
+    exportSideViews: () => {
+      if (!shirtMat) return null;
+      const originalPosition = camera.position.clone();
+      const originalQuaternion = camera.quaternion.clone();
+      const originalLightPosition = key.position.clone();
+      const radius = Math.hypot(camera.position.x - controls.target.x, camera.position.z - controls.target.z);
+      const views = {} as Record<Side, string>;
+      try {
+        SIDES.forEach((k) => {
+          const zone = ZONES[k];
+          const r = zone.zoom ?? radius;
+          key.position.z = zone.back ? -3 : 3;
+          camera.position.set(
+            controls.target.x + Math.sin(zone.az) * r,
+            zone.camY,
+            controls.target.z + Math.cos(zone.az) * r,
+          );
+          camera.lookAt(controls.target);
+          camera.updateMatrixWorld(true);
+          renderer.render(scene, camera);
+          views[k] = renderer.domElement.toDataURL("image/png");
+        });
+        return views;
+      } finally {
+        camera.position.copy(originalPosition);
+        camera.quaternion.copy(originalQuaternion);
+        key.position.copy(originalLightPosition);
+        camera.updateMatrixWorld(true);
+      }
+    },
+    exportProject: () => ({
+      side,
+      color: curColor,
+      front: JSON.stringify(fc.front.toObject(EXTRA)),
+      back: JSON.stringify(fc.back.toObject(EXTRA)),
+    }),
+    loadProject,
     bgAuto: async () => {
       const o = activeImg();
       if (!o || !o._orig) { ev.current.onBgMessage("Select an image in the placement box first."); return; }

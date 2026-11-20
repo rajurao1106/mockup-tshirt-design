@@ -2,11 +2,12 @@
 
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import Link from "next/link";
-import { CW, createEngine, SIDES, ZONES, type Engine, type EngineEvents, type SelInfo, type Side } from "@/lib/engine";
+import { CW, createEngine, SIDES, ZONES, type Engine, type EngineEvents, type OriginalArtwork, type SelInfo, type Side } from "@/lib/engine";
 import { DESIGN_CATEGORIES, type CatalogDesign } from "@/lib/designCatalog";
+import { deleteSavedDesign, listSavedDesigns, loadDesign, saveDesign, type SavedDesignSummary } from "@/lib/savedDesigns";
 import { Icon, type IconName } from "./icons";
 
-type SheetName = "color" | "add" | "edit" | "order";
+type SheetName = "color" | "add" | "edit" | "order" | "saved";
 type ToolName = SheetName | "designs" | "print" | "flip" | "plain" | "spin";
 
 const SWATCHES = ["#efede8", "#1a1a1a", "#3d3d3a", "#e11d48", "#2563eb", "#16a34a", "#f59e0b", "#7c3aed", "#9ca3af", "#0f766e"];
@@ -15,6 +16,7 @@ const TOOLS: { name: ToolName; label: string; icon: IconName }[] = [
   { name: "color", label: "Color", icon: "color" },
   { name: "add", label: "Add", icon: "add" },
   { name: "designs", label: "Designs", icon: "add" },
+  { name: "saved", label: "Save", icon: "save" },
   { name: "print", label: "Print", icon: "print" },
   { name: "edit", label: "Edit", icon: "edit" },
   { name: "flip", label: "Flip", icon: "flip" },
@@ -26,6 +28,7 @@ const SHEET_TITLE: Record<SheetName, string> = {
   add: "Add design",
   edit: "Edit selected",
   order: "Confirm mockup order",
+  saved: "Save & load designs",
 };
 
 /* ---------- small UI helpers ---------- */
@@ -88,6 +91,12 @@ export default function Mockwear() {
   const [catalogCategory, setCatalogCategory] = useState<string>("All");
   const [catalogLoading, setCatalogLoading] = useState(true);
   const [catalogError, setCatalogError] = useState("");
+  const [savedDesigns, setSavedDesigns] = useState<SavedDesignSummary[]>([]);
+  const [savedName, setSavedName] = useState("");
+  const [savedLoading, setSavedLoading] = useState(false);
+  const [savedBusy, setSavedBusy] = useState(false);
+  const [loadingSavedId, setLoadingSavedId] = useState<string | null>(null);
+  const [savedError, setSavedError] = useState("");
 
   // add-text form
   const [txt, setTxt] = useState("Hello");
@@ -173,6 +182,14 @@ export default function Mockwear() {
   /* ---------- handlers ---------- */
   const openSheet = (n: SheetName) => {
     if (sheet === n) { setSheet(null); return; }
+    if (n === "saved") {
+      setSavedError("");
+      setSavedLoading(true);
+      void listSavedDesigns()
+        .then(setSavedDesigns)
+        .catch((reason: unknown) => setSavedError(reason instanceof Error ? reason.message : "Saved designs could not be loaded"))
+        .finally(() => setSavedLoading(false));
+    }
     if ((n === "add" || n === "edit") && !printOn) setPrintOn(true);
     setSheet(n);
   };
@@ -180,7 +197,7 @@ export default function Mockwear() {
     if (n === "designs") {
       setSheet(null);
       document.getElementById("design-library")?.scrollIntoView({ behavior: "smooth", block: "start" });
-    } else if (n === "color" || n === "add" || n === "edit") openSheet(n);
+    } else if (n === "color" || n === "add" || n === "edit" || n === "saved") openSheet(n);
     else if (n === "print") setPrintOn((v) => !v);
     else if (n === "flip") setSide((s) => (s === "front" ? "back" : "front"));
     else if (n === "plain") { setPlain((v) => { showToast(!v ? "Plain shirt (design hidden)" : "Design shown"); return !v; }); }
@@ -215,14 +232,92 @@ export default function Mockwear() {
     if (!url) { showToast("Model still loading"); return; }
     const a = document.createElement("a");
     a.href = url;
-    a.download = `mockwear-${side}.png`;
+    a.download = `mockup-design-${side}.png`;
     a.click();
     showToast("PNG downloaded");
+  };
+  const saveCurrentDesign = async () => {
+    const name = savedName.trim();
+    if (!name) {
+      setSavedError("Enter a name for this saved design");
+      return;
+    }
+    const engine = eng.current;
+    if (!engine) {
+      setSavedError("The design editor is not ready yet");
+      return;
+    }
+    setSavedBusy(true);
+    setSavedError("");
+    try {
+      const createdAt = new Date().toISOString();
+      const summary: SavedDesignSummary = {
+        id: crypto.randomUUID(),
+        name,
+        color,
+        side,
+        createdAt,
+      };
+      await saveDesign(summary, engine.exportProject());
+      setSavedDesigns((current) => [summary, ...current]);
+      setSavedName("");
+      showToast("Design saved in this browser");
+    } catch (reason) {
+      setSavedError(reason instanceof Error ? reason.message : "Design could not be saved");
+    } finally {
+      setSavedBusy(false);
+    }
+  };
+  const loadSavedDesign = async (design: SavedDesignSummary) => {
+    const engine = eng.current;
+    if (!engine) {
+      setSavedError("The design editor is not ready yet");
+      return;
+    }
+    setLoadingSavedId(design.id);
+    setSavedError("");
+    try {
+      const project = await loadDesign(design.id);
+      await engine.loadProject(project);
+      setColor(project.color);
+      setSide(project.side);
+      setPlain(false);
+      setPrintOn(true);
+      setSheet(null);
+      showToast(`Loaded "${design.name}"`);
+    } catch (reason) {
+      setSavedError(reason instanceof Error ? reason.message : "Saved design could not be loaded");
+    } finally {
+      setLoadingSavedId(null);
+    }
+  };
+  const removeSavedDesign = async (id: string) => {
+    setSavedError("");
+    try {
+      await deleteSavedDesign(id);
+      setSavedDesigns((current) => current.filter((design) => design.id !== id));
+    } catch (reason) {
+      setSavedError(reason instanceof Error ? reason.message : "Saved design could not be deleted");
+    }
   };
   const openOrderSheet = () => setSheet("order");
   const dataUrlToBlob = async (dataUrl: string) => {
     const res = await fetch(dataUrl);
     return res.blob();
+  };
+  const uploadToCloudinary = async (blob: Blob, fileName: string, cloudName: string, uploadPreset: string) => {
+    const form = new FormData();
+    form.append("file", blob, fileName);
+    form.append("upload_preset", uploadPreset);
+    const uploaded = await fetch(`https://api.cloudinary.com/v1_1/${encodeURIComponent(cloudName)}/image/upload`, {
+      method: "POST",
+      body: form,
+    });
+    const result = await uploaded.json() as { secure_url?: string; error?: { message?: string } };
+    if (!uploaded.ok || !result.secure_url) {
+      throw new Error(result.error?.message ?? `Cloudinary upload failed (${uploaded.status})`);
+    }
+    return result.secure_url;
   };
   const sendWhatsAppOrder = async () => {
     const name = orderName.trim();
@@ -240,35 +335,49 @@ export default function Mockwear() {
       showToast("Quantity valid number mein bharein");
       return;
     }
-    const mockup = eng.current?.exportPng();
-    if (!mockup) {
+    const engine = eng.current;
+    const sideViews = engine?.exportSideViews();
+    if (!sideViews) {
       showToast("Mockup abhi ready nahi hai");
       return;
     }
+    const originalArtworks = engine?.getOriginalImages() ?? [];
+    const whatsappWindow = window.open("about:blank", "_blank");
+    if (!whatsappWindow) {
+      showToast("WhatsApp kholne ke liye browser popups allow karein");
+      return;
+    }
+    whatsappWindow.opener = null;
 
     setOrderBusy(true);
     try {
-      let imageUrl = "";
       const cloudName = process.env.NEXT_PUBLIC_CLOUDINARY_CLOUD_NAME;
       const uploadPreset = process.env.NEXT_PUBLIC_CLOUDINARY_UPLOAD_PRESET;
-      if (cloudName && uploadPreset) {
-        const form = new FormData();
-        form.append("file", await dataUrlToBlob(mockup), `mockwear-${Date.now()}.png`);
-        form.append("upload_preset", uploadPreset);
-        const uploaded = await fetch(`https://api.cloudinary.com/v1_1/${cloudName}/image/upload`, {
-          method: "POST",
-          body: form,
-        });
-        const result = await uploaded.json() as { secure_url?: string; error?: { message?: string } };
-        if (!uploaded.ok) {
-          throw new Error(result.error?.message ?? `Cloudinary upload failed (${uploaded.status})`);
-        }
-        imageUrl = result.secure_url ?? "";
+      if (!cloudName || !uploadPreset) {
+        throw new Error("Cloudinary cloud name and upload preset must be configured to send the images");
       }
 
-      if (!imageUrl) {
-        showToast("Cloudinary preset configure nahi hai");
-      }
+      const time = Date.now();
+      const sideViewLinks = await Promise.all(SIDES.map(async (viewSide) => ({
+        side: viewSide,
+        url: await uploadToCloudinary(
+          await dataUrlToBlob(sideViews[viewSide]),
+          `mockup-${viewSide}-${time}.png`,
+          cloudName,
+          uploadPreset,
+        ),
+      })));
+      let originalImageLinks: { side: Side; fileName: string; url: string }[] = [];
+      originalImageLinks = await Promise.all(originalArtworks.map(async (artwork: OriginalArtwork, index) => {
+        const safeName = artwork.fileName.replace(/[^\w.-]+/g, "_").slice(0, 100) || `artwork-${index + 1}.png`;
+        const url = await uploadToCloudinary(
+          await dataUrlToBlob(artwork.dataUrl),
+          `original-${artwork.side}-${index + 1}-${time}-${safeName}`,
+          cloudName,
+          uploadPreset,
+        );
+        return { side: artwork.side, fileName: safeName, url };
+      }));
 
       const addressLine = fulfillment === "delivery"
         ? `Delivery address: ${orderAddress.trim()}`
@@ -282,16 +391,22 @@ export default function Mockwear() {
         `Shirt color: ${color}`,
         `View: ${ZONES[side].label}`,
         addressLine,
-        imageUrl ? `Mockup image: ${imageUrl}` : "Mockup image: please find the downloaded PNG",
+        ...sideViewLinks.map((view) => `3D ${ZONES[view.side].label} view: ${view.url}`),
+        ...originalImageLinks.map((artwork, index) =>
+          `Original artwork ${index + 1} (${ZONES[artwork.side].label}, ${artwork.fileName}): ${artwork.url}`,
+        ),
         "Please call the customer to confirm price, print, and delivery/pickup.",
       ].join("\n");
       const ownerPhone = (process.env.NEXT_PUBLIC_OWNER_WHATSAPP ?? "917470578448").replace(/\D/g, "");
-      window.open(`https://wa.me/${ownerPhone}?text=${encodeURIComponent(message)}`, "_blank", "noopener,noreferrer");
+      whatsappWindow.location.href = `https://wa.me/${ownerPhone}?text=${encodeURIComponent(message)}`;
       setSheet(null);
     } catch (error) {
+      whatsappWindow.close();
       const message = error instanceof Error ? error.message : "";
       if (message.includes("whitelisted for unsigned uploads")) {
         showToast("Preset unsigned whitelist nahi hai. Cloudinary Settings > Upload presets mein preset Unsigned karein.");
+      } else if (message.includes("must be configured")) {
+        showToast("Mockup aur original images bhejne ke liye Cloudinary upload setup zaroori hai");
       } else {
         showToast(`Cloudinary error: ${message || "Image upload failed"}`);
       }
@@ -327,7 +442,7 @@ export default function Mockwear() {
     <div className="relative mx-auto max-w-[1120px] px-4 pb-[calc(28px+env(safe-area-inset-bottom))] pt-[22px] lg:px-10 lg:pb-11 lg:pt-[34px] min-[1300px]:max-w-[1240px]">
       {/* hero */}
       <div className="mb-[26px] flex items-center justify-between lg:mb-[34px]">
-        <span className="text-xs font-bold tracking-[.34em]">MOCKWEAR</span>
+        <span className="text-xs font-bold tracking-[.34em]">MOCKUP DESIGN</span>
         <span className="text-xs tracking-[.12em] text-[#6f7163]">01 / 04</span>
       </div>
       <h1 className="text-[clamp(34px,7vw,66px)] font-extrabold leading-[1.02] tracking-[-.025em]">
@@ -456,6 +571,56 @@ export default function Mockwear() {
               <button onClick={() => setSheet(null)} aria-label="Close" className="size-[30px] rounded-full bg-[#2a2a27]">✕</button>
             </div>
 
+            {sheet === "saved" && (
+              <div className="space-y-3">
+                <p className="text-xs leading-relaxed text-[#aaa99f]">Saved designs are kept in this browser. You can reopen them here later.</p>
+                <div className="flex gap-2">
+                  <input
+                    className={`${input} min-w-0 flex-1`}
+                    value={savedName}
+                    onChange={(e) => setSavedName(e.target.value)}
+                    maxLength={40}
+                    placeholder="Name this design"
+                    aria-label="Saved design name"
+                  />
+                  <button type="button" onClick={() => void saveCurrentDesign()} disabled={!ready || savedBusy} className={btnPri}>
+                    {savedBusy ? "Saving..." : "Save"}
+                  </button>
+                </div>
+                {savedError && <p role="alert" className="rounded-lg bg-red-950/60 px-3 py-2 text-xs text-red-200">{savedError}</p>}
+                <Sep />
+                <SecTitle>Saved designs</SecTitle>
+                {savedLoading && <p className="text-xs text-[#9a9a90]">Loading saved designs...</p>}
+                {!savedLoading && savedDesigns.length === 0 && (
+                  <p className="text-xs text-[#9a9a90]">No saved designs yet. Save the current shirt design to find it here.</p>
+                )}
+                {!savedLoading && savedDesigns.map((design) => (
+                  <div key={design.id} className="flex items-center gap-2 rounded-xl border border-[#3a3a36] bg-[#171715] p-2">
+                    <button
+                      type="button"
+                      onClick={() => void loadSavedDesign(design)}
+                      disabled={loadingSavedId !== null}
+                      className="min-w-0 flex-1 text-left disabled:opacity-60"
+                    >
+                      <span className="block truncate text-sm font-semibold">{loadingSavedId === design.id ? "Loading..." : design.name}</span>
+                      <span className="mt-1 block text-[11px] text-[#9a9a90]">
+                        {ZONES[design.side].label} · {design.color} · {new Date(design.createdAt).toLocaleDateString()}
+                      </span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void removeSavedDesign(design.id)}
+                      disabled={loadingSavedId !== null}
+                      className="rounded-lg px-2 py-1 text-xs text-[#c5c4ba] hover:bg-white/10 disabled:opacity-40"
+                      aria-label={`Delete saved design ${design.name}`}
+                    >
+                      Delete
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+
             {sheet === "color" && (
               <div className="space-y-2.5">
                 <div className="flex flex-wrap gap-2">
@@ -582,7 +747,7 @@ export default function Mockwear() {
             {sheet === "order" && (
               <div className="space-y-3">
                 <p className="text-xs leading-relaxed text-[#aaa99f]">
-                  Details submit karein. Final design Cloudinary link ke saath owner ko WhatsApp par bheja jayega. Owner call confirmation ke baad delivery ya shop pickup confirm karega.
+                  Front aur back ke 3D previews aur shirt par use ki gayi original image(s) ke links owner ko WhatsApp par bheje jayenge. Owner call confirmation ke baad delivery ya shop pickup confirm karega.
                 </p>
                 <div className="grid gap-2 sm:grid-cols-2">
                   <input
@@ -658,7 +823,7 @@ export default function Mockwear() {
         )}
 
         {/* toolbar */}
-        <nav className="grid grid-cols-8 gap-1 rounded-[18px] border border-[#2d2d2a] bg-[#181816] p-1.5 lg:col-span-full lg:w-full lg:max-w-[720px] lg:justify-self-center">
+        <nav className="grid grid-cols-9 gap-1 rounded-[18px] border border-[#2d2d2a] bg-[#181816] p-1.5 lg:col-span-full lg:w-full lg:max-w-[800px] lg:justify-self-center">
           {TOOLS.map((t) => (
             <button
               key={t.name}

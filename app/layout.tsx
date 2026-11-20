@@ -5,7 +5,7 @@ import "./globals.css";
 const inter = Inter({ subsets: ["latin"], variable: "--font-inter" });
 
 export const metadata: Metadata = {
-  title: "Mockwear — 3D T-Shirt Mockup",
+  title: "Mockup Design — 3D T-Shirt Mockup",
   description: "See how your artwork sits on the fabric.",
 };
 

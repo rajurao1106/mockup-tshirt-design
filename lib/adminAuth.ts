@@ -23,7 +23,7 @@ export function verifyAdminCredentials(username: string, password: string) {
     if (process.env.NODE_ENV === "production") return false;
   }
   const allowedUsername = expectedUsername || "admin";
-  const allowedPassword = expectedPassword || "Mockwear123!";
+  const allowedPassword = expectedPassword || "MockupDesign123!";
   return safeEqual(username, allowedUsername) && safeEqual(password, allowedPassword);
 }
 

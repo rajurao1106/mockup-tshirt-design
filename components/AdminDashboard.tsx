@@ -15,8 +15,10 @@ export default function AdminDashboard() {
   const [category, setCategory] = useState<string>(DESIGN_CATEGORIES[0]);
   const [popular, setPopular] = useState(false);
   const [file, setFile] = useState<File | null>(null);
+  const [editingDesignId, setEditingDesignId] = useState<string | null>(null);
   const [designs, setDesigns] = useState<CatalogDesign[]>([]);
   const [busy, setBusy] = useState(false);
+  const [deletingDesignId, setDeletingDesignId] = useState<string | null>(null);
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
 
@@ -65,7 +67,8 @@ export default function AdminDashboard() {
   const uploadDesign = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const formElement = event.currentTarget;
-    if (!file) {
+    const isEditing = editingDesignId !== null;
+    if (!file && !isEditing) {
       setError("Please choose an image first");
       return;
     }
@@ -73,22 +76,30 @@ export default function AdminDashboard() {
     setError("");
     setNotice("");
     const form = new FormData();
+    if (editingDesignId) form.append("id", editingDesignId);
     form.append("title", title);
     form.append("category", category);
     form.append("popular", String(popular));
-    form.append("file", file);
+    if (file) form.append("file", file);
     try {
-      const response = await fetch("/api/admin/designs", { method: "POST", body: form });
+      const response = await fetch("/api/admin/designs", { method: isEditing ? "PATCH" : "POST", body: form });
       const result = await response.json() as { design?: CatalogDesign; error?: string };
-      if (!response.ok) throw new Error(result.error ?? "Upload failed");
-      setDesigns((current) => [result.design!, ...current]);
+      if (!response.ok) throw new Error(result.error ?? (isEditing ? "Update failed" : "Upload failed"));
+      if (!result.design) throw new Error("The server did not return the saved design");
+      const savedDesign = result.design;
+      if (isEditing) {
+        setDesigns((current) => current.map((design) => design.id === savedDesign.id ? savedDesign : design));
+      } else {
+        setDesigns((current) => [savedDesign, ...current]);
+      }
       setTitle("");
       setFile(null);
       setPopular(false);
+      setEditingDesignId(null);
       formElement.reset();
-      setNotice("Design uploaded. Customers can now try it on their shirt.");
+      setNotice(isEditing ? "Design updated." : "Design uploaded. Customers can now try it on their shirt.");
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "Upload failed");
+      setError(reason instanceof Error ? reason.message : (isEditing ? "Update failed" : "Upload failed"));
     } finally {
       setBusy(false);
     }
@@ -98,6 +109,54 @@ export default function AdminDashboard() {
     await fetch("/api/admin/logout", { method: "POST" });
     setAuthenticated(false);
     setDesigns([]);
+    setEditingDesignId(null);
+    setTitle("");
+    setCategory(DESIGN_CATEGORIES[0]);
+    setPopular(false);
+    setFile(null);
+  };
+
+  const editDesign = (design: CatalogDesign) => {
+    setEditingDesignId(design.id);
+    setTitle(design.title);
+    setCategory(design.category);
+    setPopular(design.popular);
+    setFile(null);
+    setError("");
+    setNotice("");
+  };
+
+  const cancelEdit = () => {
+    setEditingDesignId(null);
+    setTitle("");
+    setCategory(DESIGN_CATEGORIES[0]);
+    setPopular(false);
+    setFile(null);
+    setError("");
+    setNotice("");
+  };
+
+  const deleteDesign = async (design: CatalogDesign) => {
+    if (!window.confirm(`Remove "${design.title}" from the customer library? The uploaded image file will remain in Cloudinary.`)) return;
+    setDeletingDesignId(design.id);
+    setError("");
+    setNotice("");
+    try {
+      const response = await fetch("/api/admin/designs", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: design.id }),
+      });
+      const result = await response.json() as { deletedId?: string; error?: string };
+      if (!response.ok) throw new Error(result.error ?? "Design could not be deleted");
+      setDesigns((current) => current.filter((item) => item.id !== design.id));
+      if (editingDesignId === design.id) cancelEdit();
+      setNotice("Design removed from the customer library. Its Cloudinary image was kept.");
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Design could not be deleted");
+    } finally {
+      setDeletingDesignId(null);
+    }
   };
 
   if (checking) {
@@ -108,7 +167,7 @@ export default function AdminDashboard() {
     return (
       <main className="grid min-h-screen place-items-center bg-[#f0efe8] px-4 py-10 text-[#171713]">
         <form onSubmit={login} className="w-full max-w-[420px] rounded-[26px] border border-black/5 bg-white p-7 shadow-[0_24px_70px_-35px_#30302066]">
-          <Link href="/" className="text-xs font-bold tracking-[.28em] text-[#4d6a1f]">MOCKWEAR ADMIN</Link>
+          <Link href="/" className="text-xs font-bold tracking-[.28em] text-[#4d6a1f]">MOCKUP DESIGN ADMIN</Link>
           <h1 className="mt-5 text-3xl font-bold tracking-tight">Sign in</h1>
           <p className="mt-2 text-sm text-[#74746a]">Upload categorized designs for the customer gallery.</p>
           <label className="mt-7 block text-xs font-semibold text-[#56564e]">
@@ -121,11 +180,11 @@ export default function AdminDashboard() {
           </label>
           {process.env.NODE_ENV !== "production" && (
             <p className="mt-3 rounded-lg bg-[#f4f5ef] px-3 py-2 text-xs text-[#5b634e]">
-              Local demo login: <b>admin</b> / <b>Mockwear123!</b>
+              Local demo login: <b>admin</b> / <b>MockupDesign123!</b>
             </p>
           )}
           {error && <p role="alert" className="mt-4 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>}
-          <button disabled={busy} className="mt-5 h-12 w-full rounded-xl bg-[#171713] text-sm font-bold text-white disabled:opacity-50">
+          <button disabled={busy || deletingDesignId !== null} className="mt-5 h-12 w-full rounded-xl bg-[#171713] text-sm font-bold text-white disabled:opacity-50">
             {busy ? "Signing in..." : "Sign in"}
           </button>
           <Link href="/" className="mt-5 block text-center text-sm text-[#77776e] hover:text-black">Back to design studio</Link>
@@ -139,7 +198,7 @@ export default function AdminDashboard() {
       <div className="mx-auto max-w-6xl">
         <header className="flex flex-wrap items-center justify-between gap-4">
           <div>
-            <Link href="/" className="text-xs font-bold tracking-[.28em] text-[#4d6a1f]">MOCKWEAR ADMIN</Link>
+            <Link href="/" className="text-xs font-bold tracking-[.28em] text-[#4d6a1f]">MOCKUP DESIGN ADMIN</Link>
             <h1 className="mt-2 text-3xl font-bold tracking-tight sm:text-4xl">Design library</h1>
             <p className="mt-1 text-sm text-[#74746a]">Upload artwork and organize it for customers.</p>
           </div>
@@ -148,7 +207,7 @@ export default function AdminDashboard() {
 
         <div className="mt-8 grid gap-6 lg:grid-cols-[minmax(280px,380px)_1fr]">
           <form onSubmit={uploadDesign} className="h-fit rounded-[22px] border border-black/5 bg-white p-5 shadow-sm sm:p-6">
-            <h2 className="text-lg font-bold">Add a design</h2>
+            <h2 className="text-lg font-bold">{editingDesignId ? "Edit design" : "Add a design"}</h2>
             <p className="mt-1 text-xs leading-relaxed text-[#77776e]">PNG, JPG, or WebP · up to 5 MB</p>
             <label className="mt-5 block text-xs font-semibold text-[#56564e]">
               Design name
@@ -161,13 +220,14 @@ export default function AdminDashboard() {
               </select>
             </label>
             <label className="mt-4 block text-xs font-semibold text-[#56564e]">
-              Artwork image
+              Artwork image{editingDesignId ? " (optional)" : ""}
               <input
                 className={`${field} mt-1.5 file:mr-3 file:rounded-lg file:border-0 file:bg-[#eeeeea] file:px-3 file:py-2 file:text-xs file:font-semibold`}
                 type="file"
                 accept="image/png,image/jpeg,image/webp"
+                key={editingDesignId ?? "new"}
                 onChange={(e) => setFile(e.target.files?.[0] ?? null)}
-                required
+                required={!editingDesignId}
               />
             </label>
             <label className="mt-4 flex cursor-pointer items-center gap-2.5 text-sm text-[#55554d]">
@@ -177,8 +237,13 @@ export default function AdminDashboard() {
             {error && <p role="alert" className="mt-4 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>}
             {notice && <p role="status" className="mt-4 rounded-lg bg-green-50 px-3 py-2 text-sm text-green-800">{notice}</p>}
             <button disabled={busy} className="mt-5 h-12 w-full rounded-xl bg-[#171713] text-sm font-bold text-white disabled:opacity-50">
-              {busy ? "Uploading..." : "Upload design"}
+              {busy ? (editingDesignId ? "Saving..." : "Uploading...") : (editingDesignId ? "Save changes" : "Upload design")}
             </button>
+            {editingDesignId && (
+              <button type="button" onClick={cancelEdit} disabled={busy} className="mt-2 h-10 w-full rounded-xl border border-[#deded6] text-sm font-semibold text-[#56564e] disabled:opacity-50">
+                Cancel edit
+              </button>
+            )}
           </form>
 
           <section className="rounded-[22px] border border-black/5 bg-white p-5 shadow-sm sm:p-6">
@@ -204,6 +269,24 @@ export default function AdminDashboard() {
                     <div className="p-3">
                       <p className="truncate text-sm font-semibold">{design.title}</p>
                       <p className="mt-1 text-[11px] text-[#77776e]">{design.category}{design.popular ? " · Popular" : ""}</p>
+                      <div className="mt-3 flex items-center justify-between gap-2">
+                        <button
+                          type="button"
+                          onClick={() => editDesign(design)}
+                          disabled={busy || deletingDesignId !== null}
+                          className="text-xs font-semibold text-[#4d6a1f] hover:underline disabled:opacity-50"
+                        >
+                          Edit
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => void deleteDesign(design)}
+                          disabled={busy || deletingDesignId !== null}
+                          className="text-xs font-semibold text-red-700 hover:underline disabled:opacity-50"
+                        >
+                          {deletingDesignId === design.id ? "Deleting..." : "Delete"}
+                        </button>
+                      </div>
                     </div>
                   </article>
                 ))}

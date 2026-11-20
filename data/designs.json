@@ -1,9 +1,17 @@
 [
   {
+    "id": "9bcc222a-de60-48af-a0ba-3f11516daf2c",
+    "title": "discipline",
+    "category": "Anime",
+    "imageUrl": "https://res.cloudinary.com/wguhtrry/image/upload/v1795143882/mockwear/designs/k0oq6vt40yttncwm5ffn.jpg",
+    "popular": false,
+    "createdAt": "2026-11-20T03:04:43.373Z"
+  },
+  {
     "id": "1ccbe105-a570-4012-be0c-32bf593e841a",
     "title": "raju",
     "category": "Typography",
-    "imageUrl": "https://res.cloudinary.com/wguhtrry/image/upload/v1795115054/mockwear/designs/zruawfsynlkmffmaol6l.png",
+    "imageUrl": "https://res.cloudinary.com/wguhtrry/image/upload/v1795143897/mockwear/designs/hyaq2sakd3zbdwyhqei8.jpg",
     "popular": true,
     "createdAt": "2026-11-19T19:04:14.590Z"
   }
