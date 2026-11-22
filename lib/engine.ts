@@ -256,13 +256,17 @@ export function createEngine(
     t.anisotropy = 8;
     tex[k] = t;
     let busy = false; // toCanvasElement() re-fires after:render
-    fc[k].on("after:render", () => {
+    const refreshTexture = () => {
       if (busy) return;
       busy = true;
       ctx.clearRect(0, 0, cv.width, cv.height);
       ctx.drawImage(fc[k].toCanvasElement(TEX_SCALE), 0, 0);
       t.needsUpdate = true;
       busy = false;
+    };
+    fc[k].on("after:render", refreshTexture);
+    (["object:moving", "object:scaling", "object:rotating", "object:resizing", "object:skewing", "text:changed"] as const).forEach((eventName) => {
+      fc[k].on(eventName, refreshTexture);
     });
   });
 

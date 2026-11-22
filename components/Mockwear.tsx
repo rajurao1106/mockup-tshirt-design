@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import Link from "next/link";
 import { CW, createEngine, SIDES, ZONES, type Engine, type EngineEvents, type OriginalArtwork, type SelInfo, type Side } from "@/lib/engine";
 import { DESIGN_CATEGORIES, type CatalogDesign } from "@/lib/designCatalog";
@@ -107,11 +107,12 @@ export default function Mockwear() {
   const [ready, setReady] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [side, setSide] = useState<Side>("front");
+  const [editorHeight, setEditorHeight] = useState(40);
+  const editorDrag = useRef(false);
   const [color, setColor] = useState(SWATCHES[0]);
   const [sheet, setSheet] = useState<SheetName | null>(null);
   const [printOn, setPrintOn] = useState(true);
   const [spin, setSpin] = useState(false);
-  const [gridOn, setGridOn] = useState(false);
   const [zoomPercent, setZoomPercent] = useState(100);
   const [designsOpen, setDesignsOpen] = useState(false);
   const [asidePanel, setAsidePanel] = useState<AsidePanelName | null>(null);
@@ -368,6 +369,37 @@ export default function Mockwear() {
   }, [addCustomFiles]);
 
   /* ---------- handlers ---------- */
+  const snapEditorHeight = (height: number) => {
+    const snapPoints = [30, 40, 60];
+    return snapPoints.reduce((nearest, point) =>
+      Math.abs(point - height) < Math.abs(nearest - height) ? point : nearest,
+    40);
+  };
+
+  const resizeEditorFromPointer = (clientY: number) => {
+    const main = stageRef.current?.closest("main");
+    if (!main) return;
+    const rect = main.getBoundingClientRect();
+    const height = ((rect.bottom - clientY) / rect.height) * 100;
+    setEditorHeight(Math.max(30, Math.min(60, snapEditorHeight(height))));
+  };
+
+  const onEditorPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
+    editorDrag.current = true;
+    event.currentTarget.setPointerCapture(event.pointerId);
+  };
+
+  const onEditorPointerMove = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (editorDrag.current) resizeEditorFromPointer(event.clientY);
+  };
+
+  const onEditorPointerUp = (event: ReactPointerEvent<HTMLDivElement>) => {
+    editorDrag.current = false;
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+  };
+
   const openSheet = (n: SheetName) => {
     if (sheet === n) { setSheet(null); return; }
     setDesignsOpen(false);
@@ -796,12 +828,25 @@ export default function Mockwear() {
         {/* 3D viewer */}
         <div
           ref={viewRef}
-          className="absolute inset-0 overflow-hidden bg-[radial-gradient(ellipse_at_50%_42%,#24253b_0%,#11131f_48%,#080912_100%)]"
+          style={printOn ? { height: `${100 - editorHeight}%` } : undefined}
+          className="absolute inset-x-0 top-0 bottom-0 overflow-hidden bg-[radial-gradient(ellipse_at_50%_42%,#24253b_0%,#11131f_48%,#080912_100%)] md:!h-full"
         >
           {!ready && (
             <div className="pointer-events-none absolute inset-0 grid place-items-center text-[13px] text-[#9a9a90]">
               {error ?? "Loading 3D model…"}
             </div>
+          )}
+          {!printOn && (
+            <button
+              type="button"
+              title="Open design placement"
+              aria-label="Open design placement"
+              onClick={() => setPrintOn(true)}
+              className="absolute right-3 top-[72px] z-30 flex h-11 items-center gap-2 rounded-full border border-[#5d42a8] bg-[#171927]/95 px-3.5 text-xs font-semibold text-white shadow-[0_10px_30px_#0009] backdrop-blur-xl md:hidden"
+            >
+              <Icon name="shirt" className="size-4" />
+              <span>Design</span>
+            </button>
           )}
           <div className="pointer-events-none absolute bottom-4 left-3 text-[11px] text-[#9699af] md:left-[94px]">Drag to rotate · Scroll to zoom</div>
           <div className="absolute bottom-3 left-1/2 z-10 flex -translate-x-1/2 items-center gap-2 rounded-full border border-[#32344a] bg-[#111321]/90 px-2 py-1.5 shadow-[0_8px_24px_#0008] md:bottom-5">
@@ -843,13 +888,28 @@ export default function Mockwear() {
             setPlaceDragOver(false);
             if (e.dataTransfer.files.length) addFilesAt(e.dataTransfer.files, e.clientX, e.clientY);
           }}
-          className={`absolute z-20 flex flex-col overflow-hidden rounded-[24px] ${
+          style={printOn ? { height: `${editorHeight}%` } : undefined}
+          className={`absolute z-20 flex flex-col overflow-hidden rounded-t-[24px] ${
             printOn
-              ? "right-2 top-auto bottom-[150px] h-[min(48vh,420px)] w-[calc(100%-1rem)] border border-[#2d3045] bg-[#10121f]/95 shadow-[0_24px_70px_#000b] backdrop-blur-xl sm:right-4 sm:w-[min(360px,calc(100%-2rem))] md:top-4 md:bottom-4 md:h-auto md:w-[340px]"
+              ? "inset-x-0 bottom-0 w-full border-t border-[#2d3045] bg-[#10121f]/98 shadow-[0_-20px_60px_#000b] backdrop-blur-xl md:!h-auto md:right-4 md:left-auto md:top-4 md:bottom-4 md:w-[340px] md:rounded-[24px] md:border"
               : "pointer-events-none right-3 top-3 h-12 w-[62px] border-transparent bg-transparent shadow-none backdrop-blur-none md:right-4 md:top-4"
-          } ${gridOn && printOn ? "guides" : ""}`}
+          }`}
         >
-          <div className={`pointer-events-auto flex h-12 shrink-0 items-center gap-2 px-3 ${printOn ? "border-b border-[#26283b]" : "justify-end"}`}>
+          {printOn && (
+            <div
+              role="separator"
+              aria-label="Resize design panel"
+              aria-orientation="horizontal"
+              className="grid h-5 shrink-0 cursor-row-resize touch-none place-items-center md:hidden"
+              onPointerDown={onEditorPointerDown}
+              onPointerMove={onEditorPointerMove}
+              onPointerUp={onEditorPointerUp}
+              onPointerCancel={onEditorPointerUp}
+            >
+              <span className="h-1 w-12 rounded-full bg-[#62657a]" />
+            </div>
+          )}
+          <div className={`pointer-events-auto flex h-11 shrink-0 items-center gap-2 px-3 ${printOn ? "border-b border-[#26283b]" : "justify-end"}`}>
             {printOn && (
               <div className="grid min-w-0 flex-1 grid-cols-2 gap-2">
                 {SIDES.map((k) => (
@@ -868,11 +928,6 @@ export default function Mockwear() {
                   </button>
                 ))}
               </div>
-            )}
-            {printOn && (
-              <IconBtn title="Guides" onClick={() => setGridOn((current) => !current)} on={gridOn}>
-                <Icon name="grid" className="size-4" />
-              </IconBtn>
             )}
             <IconBtn
               title={printOn ? "Close design placement" : "Open design placement"}
@@ -1121,7 +1176,7 @@ export default function Mockwear() {
           )}
         </div>
 
-        <nav className="absolute bottom-2 left-2 right-2 z-40 grid grid-cols-7 gap-0.5 rounded-2xl border border-[#26283b] bg-[#10121f]/95 p-1.5 shadow-[0_12px_30px_#0008] backdrop-blur-xl md:bottom-4 md:left-3 md:right-auto md:top-4 md:flex md:w-[72px] md:flex-col md:justify-start md:gap-1 md:overflow-y-auto">
+        <nav className="absolute left-1/2 top-2 z-40 grid w-[calc(100%-1rem)] grid-cols-7 gap-0.5 rounded-2xl border border-[#26283b] bg-[#10121f]/95 p-1.5 shadow-[0_12px_30px_#0008] backdrop-blur-xl -translate-x-1/2 md:left-3 md:top-3 md:w-[72px] md:-translate-x-0 md:flex md:flex-col md:justify-start md:gap-1 md:overflow-y-auto">
           {TOOLS.map((tool) => (
             <button
               key={tool.name}
