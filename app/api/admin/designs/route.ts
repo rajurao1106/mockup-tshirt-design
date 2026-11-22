@@ -1,10 +1,9 @@
 import { randomUUID } from "node:crypto";
-import { readFile, writeFile } from "node:fs/promises";
-import path from "node:path";
 import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
 import { ADMIN_COOKIE, isValidAdminSession } from "@/lib/adminAuth";
 import { DESIGN_CATEGORIES, type CatalogDesign } from "@/lib/designCatalog";
+import { readDesignCatalog, writeDesignCatalog } from "@/lib/designCatalogStore";
 
 export async function POST(request: Request) {
   const cookieStore = await cookies();
@@ -42,6 +41,15 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Choose a valid design category" }, { status: 400 });
   }
 
+  let current: CatalogDesign[];
+  try {
+    current = await readDesignCatalog();
+  } catch (error) {
+    console.error("Could not read the design catalog before upload", error);
+    const message = error instanceof Error ? error.message : "Design catalog is unavailable";
+    return NextResponse.json({ error: message }, { status: 503 });
+  }
+
   const uploadForm = new FormData();
   uploadForm.append("file", file, file.name);
   uploadForm.append("upload_preset", uploadPreset);
@@ -67,15 +75,13 @@ export async function POST(request: Request) {
     popular,
     createdAt: new Date().toISOString(),
   };
-  const catalogPath = path.join(process.cwd(), "data", "designs.json");
 
   try {
-    const current = JSON.parse(await readFile(catalogPath, "utf8")) as CatalogDesign[];
-    if (!Array.isArray(current)) throw new Error("Design catalog must be a JSON array");
-    await writeFile(catalogPath, JSON.stringify([design, ...current], null, 2), "utf8");
+    await writeDesignCatalog([design, ...current]);
   } catch (error) {
     console.error("Could not save uploaded design metadata", error);
-    return NextResponse.json({ error: "Image uploaded, but catalog could not be saved" }, { status: 500 });
+    const message = error instanceof Error ? error.message : "catalog could not be saved";
+    return NextResponse.json({ error: `Image uploaded, but ${message}` }, { status: 500 });
   }
 
   return NextResponse.json({ design }, { status: 201 });
@@ -119,14 +125,13 @@ export async function PATCH(request: Request) {
     return NextResponse.json({ error: "Image size must be under 5 MB" }, { status: 400 });
   }
 
-  const catalogPath = path.join(process.cwd(), "data", "designs.json");
   let current: CatalogDesign[];
   try {
-    current = JSON.parse(await readFile(catalogPath, "utf8")) as CatalogDesign[];
-    if (!Array.isArray(current)) throw new Error("Design catalog must be a JSON array");
+    current = await readDesignCatalog();
   } catch (error) {
     console.error("Could not read the design catalog for editing", error);
-    return NextResponse.json({ error: "Design catalog is unavailable" }, { status: 500 });
+    const message = error instanceof Error ? error.message : "Design catalog is unavailable";
+    return NextResponse.json({ error: message }, { status: 500 });
   }
 
   const index = current.findIndex((design) => design.id === id);
@@ -171,11 +176,12 @@ export async function PATCH(request: Request) {
   current[index] = design;
 
   try {
-    await writeFile(catalogPath, JSON.stringify(current, null, 2), "utf8");
+    await writeDesignCatalog(current);
   } catch (error) {
     console.error("Could not save edited design metadata", error);
+    const message = error instanceof Error ? error.message : "Design details could not be saved";
     return NextResponse.json(
-      { error: file instanceof File ? "Image uploaded, but design details could not be saved" : "Design details could not be saved" },
+      { error: file instanceof File ? `Image uploaded, but ${message}` : message },
       { status: 500 },
     );
   }
@@ -200,14 +206,13 @@ export async function DELETE(request: Request) {
     return NextResponse.json({ error: "Design ID is required" }, { status: 400 });
   }
 
-  const catalogPath = path.join(process.cwd(), "data", "designs.json");
   let current: CatalogDesign[];
   try {
-    current = JSON.parse(await readFile(catalogPath, "utf8")) as CatalogDesign[];
-    if (!Array.isArray(current)) throw new Error("Design catalog must be a JSON array");
+    current = await readDesignCatalog();
   } catch (error) {
     console.error("Could not read the design catalog for deletion", error);
-    return NextResponse.json({ error: "Design catalog is unavailable" }, { status: 500 });
+    const message = error instanceof Error ? error.message : "Design catalog is unavailable";
+    return NextResponse.json({ error: message }, { status: 500 });
   }
 
   if (!current.some((design) => design.id === id)) {
@@ -215,10 +220,11 @@ export async function DELETE(request: Request) {
   }
 
   try {
-    await writeFile(catalogPath, JSON.stringify(current.filter((design) => design.id !== id), null, 2), "utf8");
+    await writeDesignCatalog(current.filter((design) => design.id !== id));
   } catch (error) {
     console.error("Could not delete design metadata", error);
-    return NextResponse.json({ error: "Design could not be removed from the customer library" }, { status: 500 });
+    const message = error instanceof Error ? error.message : "Design could not be removed from the customer library";
+    return NextResponse.json({ error: message }, { status: 500 });
   }
 
   return NextResponse.json({ deletedId: id });

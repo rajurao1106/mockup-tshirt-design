@@ -22,6 +22,13 @@ export interface SelInfo {
   fill: string;
   font: string;
   opacity: number;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  angle: number;
+  locked: boolean;
+  bounds: { left: number; top: number; width: number; height: number };
 }
 
 export interface EngineEvents {
@@ -49,6 +56,7 @@ export interface Engine {
   setSpin(on: boolean): void;
   fit(): void;
   addImageFile(f: File, at?: { x: number; y: number }): void;
+  replaceSelectedImage(file: File): void;
   addText(text: string, font: string, color: string, at?: { x: number; y: number }): void;
   deleteSelected(): void;
   undo(): void;
@@ -59,9 +67,16 @@ export interface Engine {
   setFill(v: string): void;
   setFont(v: string): void;
   setOpacity(v: number): void;
+  setAngle(degrees: number): void;
+  setGeometry(values: Partial<Pick<SelInfo, "x" | "y" | "width" | "height">>): void;
   commit(): void;
+  align(position: "left" | "centerX" | "right" | "top" | "centerY" | "bottom"): void;
   mirror(): void;
+  flipVertical(): void;
+  toggleLock(): void;
   center(): void;
+  zoomIn(): void;
+  zoomOut(): void;
   duplicate(): void;
   forward(): void;
   backward(): void;
@@ -264,11 +279,11 @@ export function createEngine(
   fc.front.renderAll();
 
   function fit() {
-    const r = place.getBoundingClientRect();
+    const r = stage.getBoundingClientRect();
     if (r.width < 60 || r.height < 60) return;
     SIDES.forEach((k) => {
       const ch = ZONES[k].ch;
-      const s = Math.min((r.width - 36) / CW, (r.height - 76) / ch);
+      const s = Math.min((r.width - 24) / CW, (r.height - 24) / ch);
       fc[k].setDimensions(
         { width: `${Math.floor(CW * s)}px`, height: `${Math.floor(ch * s)}px` },
         { cssOnly: true },
@@ -278,6 +293,7 @@ export function createEngine(
   }
   const roPlace = new ResizeObserver(fit);
   roPlace.observe(place);
+  roPlace.observe(stage);
 
   /* ---------------- undo / redo ---------------- */
   const hist = Object.fromEntries(SIDES.map((k) => [k, { s: [] as string[], i: -1 }])) as Record<
@@ -333,6 +349,13 @@ export function createEngine(
       fill: typeof t.fill === "string" && /^#[0-9a-f]{6}$/i.test(t.fill) ? t.fill : "#111111",
       font: isText ? t.fontFamily ?? "Impact" : "",
       opacity: Math.round((o.opacity ?? 1) * 100),
+      x: Math.round(o.getCenterPoint().x),
+      y: Math.round(o.getCenterPoint().y),
+      width: Math.round(o.getScaledWidth()),
+      height: Math.round(o.getScaledHeight()),
+      angle: Math.round(o.angle ?? 0),
+      locked: Boolean(o.lockMovementX && o.lockMovementY && o.lockScalingX && o.lockScalingY && o.lockRotation),
+      bounds: o.getBoundingRect(),
     };
   }
   function emitSel() { ev.current.onSelection(readSel()); }
@@ -340,7 +363,10 @@ export function createEngine(
   SIDES.forEach((k) => {
     snap(k);
     (["object:added", "object:modified", "object:removed", "text:changed"] as const).forEach((n) =>
-      fc[k].on(n, () => snap(k)),
+      fc[k].on(n, () => {
+        snap(k);
+        if (n === "object:modified" && k === side) emitSel();
+      }),
     );
     (["selection:created", "selection:updated", "selection:cleared"] as const).forEach((n) =>
       fc[k].on(n, emitSel),
@@ -355,7 +381,7 @@ export function createEngine(
   refImg.alt = "";
   refImg.draggable = false;
   Object.assign(refImg.style, { position: "absolute", pointerEvents: "none", display: "none", maxWidth: "none", userSelect: "none" });
-  place.insertBefore(refImg, place.firstChild);
+  stage.insertBefore(refImg, stage.firstChild);
   const refUrl: Partial<Record<Side, string>> = {};
   let shirtRoot: THREE.Object3D | null = null;
   let refRT: THREE.WebGLRenderTarget | null = null;
@@ -364,12 +390,12 @@ export function createEngine(
     const url = refUrl[side];
     const cr = wrap(fc[side]).getBoundingClientRect();
     if (!url || cr.width < 10) { refImg.style.display = "none"; return; }
-    const pr = place.getBoundingClientRect();
+    const pr = stage.getBoundingClientRect();
     const z = ZONES[side];
     const ppu = (cr.width - 3) / z.dw; // px per model unit (3px = dashed border)
     const w = (IW.x1 - IW.x0) * ppu, h = (IW.y1 - IW.y0) * ppu;
-    const cx = cr.left - pr.left - place.clientLeft + cr.width / 2;
-    const cy = cr.top - pr.top - place.clientTop + cr.height / 2;
+    const cx = cr.left - pr.left - stage.clientLeft + cr.width / 2;
+    const cy = cr.top - pr.top - stage.clientTop + cr.height / 2;
     const iy = cy - ((IW.y0 + IW.y1) / 2 - z.y) * ppu;
     refImg.style.width = `${w}px`;
     refImg.style.height = `${h}px`;
@@ -549,6 +575,56 @@ export function createEngine(
     r.readAsDataURL(f);
   }
 
+  function replaceSelectedImage(file: File) {
+    const target = activeImg();
+    if (!target) {
+      ev.current.onToast("Select an image to replace");
+      return;
+    }
+    if (!/^image\//.test(file.type)) {
+      ev.current.onError("Choose a valid image file");
+      return;
+    }
+    const canvas = target.canvas;
+    if (!canvas) {
+      ev.current.onError("Selected image is no longer available");
+      return;
+    }
+    const width = Math.max(target.getScaledWidth(), 1);
+    const height = Math.max(target.getScaledHeight(), 1);
+    const reader = new FileReader();
+    reader.onload = async () => {
+      if (typeof reader.result !== "string") {
+        ev.current.onError("Replacement image could not be read");
+        return;
+      }
+      try {
+        const image = target as unknown as fabric.Image;
+        await image.setSrc(reader.result);
+        if (target.canvas !== canvas) return;
+        const scale = Math.min(width / (image.width ?? 1), height / (image.height ?? 1));
+        target.set({ scaleX: scale, scaleY: scale });
+        target.setCoords();
+        const artwork = target as ArtObj;
+        artwork._orig = reader.result;
+        artwork._key = null;
+        artwork._fileName = file.name;
+        canvas.requestRenderAll();
+        snap(sideOf(canvas));
+        emitSel();
+        ev.current.onToast("Image replaced");
+      } catch (error) {
+        console.error(error);
+        ev.current.onError("Replacement image could not be loaded");
+      }
+    };
+    reader.onerror = () => {
+      console.error(reader.error);
+      ev.current.onError("Replacement image could not be read");
+    };
+    reader.readAsDataURL(file);
+  }
+
   function addText(text: string, font: string, color: string, at?: { x: number; y: number }) {
     const c = fc[side];
     const t = new fabric.IText(text || "Text", {
@@ -633,6 +709,7 @@ export function createEngine(
     setSpin: (on) => { controls.autoRotate = on; },
     fit,
     addImageFile,
+    replaceSelectedImage,
     addText,
     deleteSelected,
     undo: () => { const h = hist[side]; if (h.i > 0) restore(side, h.i - 1); },
@@ -646,9 +723,83 @@ export function createEngine(
     setFill: (v) => { const o = active(); if (o) { o.set("fill", v); redraw(); } },
     setFont: (v) => { const o = active(); if (o) { o.set("fontFamily" as keyof fabric.Object, v as never); redraw(); snap(side); } },
     setOpacity: (v) => { const o = active(); if (o) { o.set("opacity", v / 100); redraw(); } },
+    setAngle: (degrees) => {
+      const o = active();
+      if (!o) return;
+      o.set("angle", degrees);
+      o.setCoords();
+      redraw();
+      emitSel();
+    },
+    setGeometry: (values) => {
+      const o = active();
+      if (!o) return;
+      const width = Math.max(o.getScaledWidth(), 1);
+      const height = Math.max(o.getScaledHeight(), 1);
+      const center = o.getCenterPoint();
+      o.set({
+        originX: "center",
+        originY: "center",
+        left: values.x ?? center.x,
+        top: values.y ?? center.y,
+        scaleX: (o.scaleX ?? 1) * (Math.max(values.width ?? width, 1) / width),
+        scaleY: (o.scaleY ?? 1) * (Math.max(values.height ?? height, 1) / height),
+      });
+      o.setCoords();
+      redraw();
+      emitSel();
+    },
     commit: () => snap(side),
+    align: (position) => {
+      const o = active(), c = fc[side];
+      if (!o) return;
+      const bounds = o.getBoundingRect();
+      const center = o.getCenterPoint();
+      let x = center.x;
+      let y = center.y;
+      if (position === "left") x -= bounds.left;
+      if (position === "centerX") x += CW / 2 - (bounds.left + bounds.width / 2);
+      if (position === "right") x += CW - bounds.left - bounds.width;
+      if (position === "top") y -= bounds.top;
+      if (position === "centerY") y += ZONES[side].ch / 2 - (bounds.top + bounds.height / 2);
+      if (position === "bottom") y += ZONES[side].ch - bounds.top - bounds.height;
+      o.set({ originX: "center", originY: "center", left: x, top: y });
+      o.setCoords();
+      c.requestRenderAll();
+      snap(side);
+      emitSel();
+    },
     mirror: () => { const o = active(); if (o) { o.set("flipX", !o.flipX); redraw(); snap(side); } },
+    flipVertical: () => { const o = active(); if (o) { o.set("flipY", !o.flipY); redraw(); snap(side); } },
+    toggleLock: () => {
+      const o = active();
+      if (!o) return;
+      const locked = Boolean(o.lockMovementX && o.lockMovementY && o.lockScalingX && o.lockScalingY && o.lockRotation);
+      const next = !locked;
+      o.set({
+        lockMovementX: next,
+        lockMovementY: next,
+        lockScalingX: next,
+        lockScalingY: next,
+        lockRotation: next,
+      });
+      redraw();
+      snap(side);
+      emitSel();
+    },
     center: () => { const o = active(); if (o) { fc[side].centerObject(o); o.setCoords(); redraw(); snap(side); } },
+    zoomIn: () => {
+      const offset = camera.position.clone().sub(controls.target);
+      offset.setLength(THREE.MathUtils.clamp(offset.length() * 0.85, controls.minDistance, controls.maxDistance));
+      camera.position.copy(controls.target).add(offset);
+      controls.update();
+    },
+    zoomOut: () => {
+      const offset = camera.position.clone().sub(controls.target);
+      offset.setLength(THREE.MathUtils.clamp(offset.length() * 1.18, controls.minDistance, controls.maxDistance));
+      camera.position.copy(controls.target).add(offset);
+      controls.update();
+    },
     duplicate: () => {
       const o = active(), c = fc[side];
       if (!o) return;

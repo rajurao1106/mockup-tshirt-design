@@ -7,36 +7,52 @@ import { DESIGN_CATEGORIES, type CatalogDesign } from "@/lib/designCatalog";
 import { deleteSavedDesign, listSavedDesigns, loadDesign, saveDesign, type SavedDesignSummary } from "@/lib/savedDesigns";
 import { Icon, type IconName } from "./icons";
 
-type SheetName = "color" | "add" | "edit" | "order" | "saved";
-type ToolName = SheetName | "designs" | "print" | "flip" | "plain" | "spin";
+type SheetName = "color" | "add" | "text" | "edit" | "help" | "order" | "saved";
+type ToolName = "color" | "add" | "designs" | "text" | "upload" | "saved" | "spin" | "help";
+type ContextMenuName = "arrange" | "layers" | "more";
 
 const SWATCHES = ["#efede8", "#1a1a1a", "#3d3d3a", "#e11d48", "#2563eb", "#16a34a", "#f59e0b", "#7c3aed", "#9ca3af", "#0f766e"];
 const FONTS = ["Impact", "Georgia", "Courier New", "Arial", "Trebuchet MS"];
+const CUSTOM_UPLOAD_LIMIT = 5;
+const CUSTOM_UPLOAD_COUNT_KEY = "mockwear-custom-upload-count-v1";
+const OWNER_WHATSAPP = (process.env.NEXT_PUBLIC_OWNER_WHATSAPP ?? "917470578448").replace(/\D/g, "");
 const TOOLS: { name: ToolName; label: string; icon: IconName }[] = [
   { name: "color", label: "Color", icon: "color" },
+  { name: "designs", label: "Designs", icon: "designs" },
   { name: "add", label: "Add", icon: "add" },
-  { name: "designs", label: "Designs", icon: "add" },
+  { name: "text", label: "Text", icon: "text" },
+  { name: "upload", label: "Upload", icon: "upload" },
   { name: "saved", label: "Save", icon: "save" },
-  { name: "print", label: "Print", icon: "print" },
-  { name: "edit", label: "Edit", icon: "edit" },
-  { name: "flip", label: "Flip", icon: "flip" },
-  { name: "plain", label: "Plain", icon: "plain" },
   { name: "spin", label: "Spin", icon: "spin" },
+  { name: "help", label: "Help", icon: "help" },
 ];
 const SHEET_TITLE: Record<SheetName, string> = {
   color: "Shirt color",
   add: "Add design",
+  text: "Add text",
   edit: "Edit selected",
+  help: "Editor help",
   order: "Confirm mockup order",
   saved: "Save & load designs",
 };
+type UploadAccess = "checking" | "customer" | "admin";
+
+function readCustomUploadCount() {
+  const savedCount = localStorage.getItem(CUSTOM_UPLOAD_COUNT_KEY);
+  if (savedCount === null) return 0;
+  const count = Number(savedCount);
+  if (!Number.isSafeInteger(count) || count < 0) {
+    throw new Error("Custom upload limit data is invalid. Please contact us for help.");
+  }
+  return count;
+}
 
 /* ---------- small UI helpers ---------- */
 const btn =
-  "rounded-[10px] border border-[#3a3a36] bg-[#2a2a27] px-3.5 py-2 text-[13px] font-semibold text-[#f1f0ea] transition hover:bg-[#34342f]";
-const btnPri = "rounded-[10px] border border-white bg-white px-3.5 py-2 text-[13px] font-semibold text-[#111] transition hover:bg-[#e8e8e2]";
+  "rounded-xl border border-[#34364a] bg-[#202235] px-3.5 py-2 text-[13px] font-semibold text-[#ececf7] transition hover:bg-[#292c43]";
+const btnPri = "rounded-xl border border-[#803cff] bg-gradient-to-r from-[#5e19ff] to-[#a51eff] px-3.5 py-2 text-[13px] font-semibold text-white transition hover:brightness-110";
 const input =
-  "min-w-0 rounded-[10px] border border-[#3a3a36] bg-[#111110] px-3 py-2 text-sm text-[#f1f0ea] outline-none focus:border-white/60";
+  "min-w-0 rounded-xl border border-[#34364a] bg-[#171927] px-3 py-2 text-sm text-[#f1f0fa] outline-none focus:border-[#8d4bff]";
 const colorInput = "size-[38px] cursor-pointer rounded-[10px] border border-white/20 bg-transparent p-0";
 
 function IconBtn({ title, onClick, disabled, on, children }: {
@@ -49,7 +65,25 @@ function IconBtn({ title, onClick, disabled, on, children }: {
       onClick={onClick}
       disabled={disabled}
       className={`grid size-[38px] place-items-center rounded-full transition disabled:cursor-default disabled:opacity-35 ${
-        on ? "bg-white text-[#111]" : "bg-[#242422] text-[#f1f0ea] hover:bg-[#30302d]"
+        on ? "bg-[#5f1cff] text-white shadow-[0_0_18px_#712aff88]" : "border border-[#292b3d] bg-[#171927] text-[#f1f0fa] hover:bg-[#24263a]"
+      }`}
+    >
+      {children}
+    </button>
+  );
+}
+
+function ContextIconButton({ title, onClick, children, active = false }: {
+  title: string; onClick: () => void; children: ReactNode; active?: boolean;
+}) {
+  return (
+    <button
+      type="button"
+      title={title}
+      aria-label={title}
+      onClick={onClick}
+      className={`grid size-8 shrink-0 place-items-center rounded-lg transition ${
+        active ? "bg-[#e9e9e3] text-[#111]" : "text-[#44443e] hover:bg-[#ecece7]"
       }`}
     >
       {children}
@@ -68,6 +102,8 @@ export default function Mockwear() {
   const placeRef = useRef<HTMLDivElement>(null);
   const stageRef = useRef<HTMLDivElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+  const replaceFileRef = useRef<HTMLInputElement>(null);
+  const contextToolbarRef = useRef<HTMLDivElement>(null);
   const eng = useRef<Engine | null>(null);
   const toastTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
 
@@ -77,18 +113,25 @@ export default function Mockwear() {
   const [color, setColor] = useState(SWATCHES[0]);
   const [sheet, setSheet] = useState<SheetName | null>(null);
   const [printOn, setPrintOn] = useState(true);
-  const [plain, setPlain] = useState(false);
   const [spin, setSpin] = useState(false);
   const [gridOn, setGridOn] = useState(false);
+  const [zoomPercent, setZoomPercent] = useState(100);
+  const [designsOpen, setDesignsOpen] = useState(false);
   const [canUndo, setCanUndo] = useState(false);
   const [canRedo, setCanRedo] = useState(false);
   const [sel, setSel] = useState<SelInfo | null>(null);
+  const [contextMenu, setContextMenu] = useState<ContextMenuName | null>(null);
+  const [toolbarPosition, setToolbarPosition] = useState({ left: 8, top: 8 });
   const [toast, setToast] = useState<string | null>(null);
   const [bgMsg, setBgMsg] = useState("Select an image, then tap Auto remove.");
   const [dragOver, setDragOver] = useState(false);
   const [placeDragOver, setPlaceDragOver] = useState(false);
+  const [uploadAccess, setUploadAccess] = useState<UploadAccess>("checking");
+  const [customUploadCount, setCustomUploadCount] = useState(0);
+  const [uploadQuotaError, setUploadQuotaError] = useState("");
   const [catalog, setCatalog] = useState<CatalogDesign[]>([]);
   const [catalogCategory, setCatalogCategory] = useState<string>("All");
+  const [catalogSearch, setCatalogSearch] = useState("");
   const [catalogLoading, setCatalogLoading] = useState(true);
   const [catalogError, setCatalogError] = useState("");
   const [savedDesigns, setSavedDesigns] = useState<SavedDesignSummary[]>([]);
@@ -119,13 +162,97 @@ export default function Mockwear() {
     toastTimer.current = setTimeout(() => setToast(null), 1800);
   }, []);
 
+  const reserveCustomUploads = useCallback((requestedCount: number) => {
+    if (uploadAccess === "checking") {
+      showToast("Checking upload access. Please try again in a moment.");
+      return { count: 0, reachedLimit: false };
+    }
+    if (uploadAccess === "admin") return { count: requestedCount, reachedLimit: false };
+    if (uploadQuotaError) {
+      showToast(uploadQuotaError);
+      return { count: 0, reachedLimit: false };
+    }
+
+    let currentCount: number;
+    try {
+      currentCount = readCustomUploadCount();
+    } catch (reason) {
+      const message = reason instanceof Error ? reason.message : "Upload limit data could not be read";
+      setUploadQuotaError(message);
+      showToast(message);
+      return { count: 0, reachedLimit: false };
+    }
+    const availableSlots = Math.max(0, CUSTOM_UPLOAD_LIMIT - currentCount);
+    if (availableSlots === 0) {
+      setCustomUploadCount(currentCount);
+      showToast("Upload limit reached. Contact us on WhatsApp to add more custom designs.");
+      return { count: 0, reachedLimit: true };
+    }
+    const count = Math.min(requestedCount, availableSlots);
+    const nextCount = currentCount + count;
+    try {
+      localStorage.setItem(CUSTOM_UPLOAD_COUNT_KEY, String(nextCount));
+    } catch {
+      const message = "Browser storage is unavailable, so the upload limit cannot be applied.";
+      setUploadQuotaError(message);
+      showToast(message);
+      return { count: 0, reachedLimit: false };
+    }
+    setCustomUploadCount(nextCount);
+    return { count, reachedLimit: nextCount >= CUSTOM_UPLOAD_LIMIT };
+  }, [showToast, uploadAccess, uploadQuotaError]);
+
+  const addCustomFiles = useCallback((files: FileList | File[], at?: { x: number; y: number }, closeSheet = true) => {
+    const images = Array.from(files).filter((file) => file.type.startsWith("image/"));
+    if (images.length === 0) return;
+    const engine = eng.current;
+    if (!engine) {
+      showToast("The design editor is not ready yet");
+      return;
+    }
+    const reservation = reserveCustomUploads(images.length);
+    if (reservation.count === 0) return;
+    const acceptedImages = images.slice(0, reservation.count);
+    acceptedImages.forEach((file) => engine.addImageFile(file, at));
+    setPrintOn(true);
+    setDesignsOpen(false);
+    if (closeSheet) setSheet(null);
+    if (reservation.reachedLimit || reservation.count < images.length) {
+      showToast("Upload limit reached. Contact us on WhatsApp to add more custom designs.");
+    }
+  }, [reserveCustomUploads, showToast]);
+
+  const replaceImage = useCallback((file: File) => {
+    if (sel?.kind !== "image") {
+      showToast("Select an image to replace");
+      return;
+    }
+    if (!file.type.startsWith("image/")) {
+      showToast("Choose a valid image file");
+      return;
+    }
+    const reservation = reserveCustomUploads(1);
+    if (reservation.count === 0) return;
+    eng.current?.replaceSelectedImage(file);
+    if (reservation.reachedLimit) {
+      showToast("Upload limit reached. Contact us on WhatsApp to add more custom designs.");
+    }
+  }, [reserveCustomUploads, sel?.kind, showToast]);
+
+  const updateSelectedGeometry = (fieldName: "x" | "y" | "width" | "height", value: number) => {
+    if (!sel) return;
+    const next = { ...sel, [fieldName]: value };
+    setSel(next);
+    eng.current?.setGeometry({ x: next.x, y: next.y, width: next.width, height: next.height });
+  };
+
   // engine events always point at the latest closures
   const events = useRef<EngineEvents>({
     onSelection: () => {}, onHistory: () => {}, onToast: () => {}, onBgMessage: () => {}, onReady: () => {}, onError: () => {},
   });
   useEffect(() => {
     events.current = {
-      onSelection: setSel,
+      onSelection: (info) => { setSel(info); if (!info) setContextMenu(null); },
       onHistory: (u, r) => { setCanUndo(u); setCanRedo(r); },
       onToast: showToast,
       onBgMessage: setBgMsg,
@@ -144,7 +271,6 @@ export default function Mockwear() {
   /* keep engine in sync with React state */
   useEffect(() => { eng.current?.setSide(side); }, [side]);
   useEffect(() => { eng.current?.setColor(color); }, [color]);
-  useEffect(() => { eng.current?.setPlain(plain); }, [plain]);
   useEffect(() => { eng.current?.setSpin(spin); }, [spin]);
   useEffect(() => {
     let active = true;
@@ -163,6 +289,69 @@ export default function Mockwear() {
     return () => { active = false; };
   }, []);
 
+  useEffect(() => {
+    let active = true;
+    void fetch("/api/admin/session", { cache: "no-store" })
+      .then(async (response) => {
+        const result = await response.json() as { authenticated?: boolean };
+        if (!response.ok) throw new Error("Admin session could not be checked");
+        if (!active) return;
+        if (result.authenticated) {
+          setUploadAccess("admin");
+          return;
+        }
+        setCustomUploadCount(readCustomUploadCount());
+        setUploadAccess("customer");
+      })
+      .catch((reason: unknown) => {
+        if (!active) return;
+        try {
+          setCustomUploadCount(readCustomUploadCount());
+          setUploadAccess("customer");
+          showToast("Admin access could not be verified; the five-upload limit applies.");
+        } catch (storageError) {
+          const message = storageError instanceof Error ? storageError.message : "Upload limit data could not be read";
+          setUploadQuotaError(message);
+          setUploadAccess("customer");
+        }
+        if (reason instanceof Error) console.error(reason);
+      });
+    return () => { active = false; };
+  }, [showToast]);
+
+  useEffect(() => {
+    if (!sel || !printOn) return;
+
+    const updateToolbarPosition = () => {
+      const canvas = stageRef.current?.querySelector<HTMLElement>(".canvas-container");
+      const placement = placeRef.current;
+      if (!canvas || !placement) return;
+      const canvasRect = canvas.getBoundingClientRect();
+      const placementRect = placement.getBoundingClientRect();
+      const scaleX = canvasRect.width / CW;
+      const scaleY = canvasRect.height / ZONES[side].ch;
+      const toolbarWidth = contextMenu === "arrange" ? 320 : contextToolbarRef.current?.offsetWidth ?? (sel.kind === "image" ? 272 : 200);
+      const toolbarHeight = contextToolbarRef.current?.offsetHeight ?? 40;
+      const menuHeight = contextMenu === "arrange" ? 280 : contextMenu === "more" ? 210 : contextMenu === "layers" ? 92 : 0;
+      const objectCenterX = canvasRect.left - placementRect.left + (sel.bounds.left + sel.bounds.width / 2) * scaleX;
+      const maxLeft = Math.max(8, placement.clientWidth - toolbarWidth - 8);
+      const left = Math.max(8, Math.min(objectCenterX - toolbarWidth / 2, maxLeft));
+      const objectTop = canvasRect.top - placementRect.top + sel.bounds.top * scaleY;
+      const objectBottom = objectTop + sel.bounds.height * scaleY;
+      const maxTop = Math.max(8, placement.clientHeight - toolbarHeight - 8);
+      const preferredTop = objectTop - toolbarHeight - 6;
+      let top = Math.min(preferredTop >= 8 ? preferredTop : objectBottom + 6, maxTop);
+      if (menuHeight > 0) {
+        top = Math.min(top, Math.max(8, placement.clientHeight - toolbarHeight - menuHeight - 8));
+      }
+      setToolbarPosition({ left, top: Math.max(8, top) });
+    };
+
+    updateToolbarPosition();
+    window.addEventListener("resize", updateToolbarPosition);
+    return () => window.removeEventListener("resize", updateToolbarPosition);
+  }, [contextMenu, printOn, sel, side]);
+
   /* Delete key + paste image */
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -172,16 +361,17 @@ export default function Mockwear() {
       eng.current?.deleteSelected();
     };
     const onPaste = (e: ClipboardEvent) => {
-      Array.from(e.clipboardData?.files ?? []).forEach((f) => eng.current?.addImageFile(f));
+      addCustomFiles(e.clipboardData?.files ?? [], undefined, false);
     };
     addEventListener("keydown", onKey);
     addEventListener("paste", onPaste);
     return () => { removeEventListener("keydown", onKey); removeEventListener("paste", onPaste); };
-  }, []);
+  }, [addCustomFiles]);
 
   /* ---------- handlers ---------- */
   const openSheet = (n: SheetName) => {
     if (sheet === n) { setSheet(null); return; }
+    setDesignsOpen(false);
     if (n === "saved") {
       setSavedError("");
       setSavedLoading(true);
@@ -190,25 +380,25 @@ export default function Mockwear() {
         .catch((reason: unknown) => setSavedError(reason instanceof Error ? reason.message : "Saved designs could not be loaded"))
         .finally(() => setSavedLoading(false));
     }
-    if ((n === "add" || n === "edit") && !printOn) setPrintOn(true);
+    if ((n === "add" || n === "edit" || n === "text") && !printOn) setPrintOn(true);
     setSheet(n);
   };
   const onTool = (n: ToolName) => {
     if (n === "designs") {
       setSheet(null);
-      document.getElementById("design-library")?.scrollIntoView({ behavior: "smooth", block: "start" });
-    } else if (n === "color" || n === "add" || n === "edit" || n === "saved") openSheet(n);
-    else if (n === "print") setPrintOn((v) => !v);
-    else if (n === "flip") setSide((s) => (s === "front" ? "back" : "front"));
-    else if (n === "plain") { setPlain((v) => { showToast(!v ? "Plain shirt (design hidden)" : "Design shown"); return !v; }); }
+      setDesignsOpen((current) => !current);
+    } else if (n === "upload") {
+      setSheet(null);
+      setDesignsOpen(false);
+      fileRef.current?.click();
+    } else if (n === "color" || n === "add" || n === "text" || n === "saved" || n === "help") openSheet(n);
     else if (n === "spin") setSpin((v) => !v);
   };
   const isOn = (n: ToolName) =>
-    n === "print" ? printOn : n === "plain" ? plain : n === "spin" ? spin : n === "flip" || n === "designs" ? false : sheet === n;
+    n === "spin" ? spin : n === "designs" ? designsOpen : sheet === n;
 
   const addFiles = (files: FileList | File[]) => {
-    Array.from(files).forEach((f) => eng.current?.addImageFile(f));
-    setSheet(null);
+    addCustomFiles(files);
   };
   const addFilesAt = (files: FileList | File[], clientX: number, clientY: number) => {
     const canvasEl = stageRef.current?.querySelector<HTMLElement>(".canvas-container");
@@ -223,9 +413,7 @@ export default function Mockwear() {
     }
     const x = ((clientX - r.left) / r.width) * CW;
     const y = ((clientY - r.top) / r.height) * ZONES[side].ch;
-    Array.from(files).forEach((f) => eng.current?.addImageFile(f, { x, y }));
-    setPrintOn(true);
-    setSheet(null);
+    addCustomFiles(files, { x, y });
   };
   const exportPng = () => {
     const url = eng.current?.exportPng();
@@ -281,8 +469,8 @@ export default function Mockwear() {
       await engine.loadProject(project);
       setColor(project.color);
       setSide(project.side);
-      setPlain(false);
       setPrintOn(true);
+      setDesignsOpen(false);
       setSheet(null);
       showToast(`Loaded "${design.name}"`);
     } catch (reason) {
@@ -300,7 +488,11 @@ export default function Mockwear() {
       setSavedError(reason instanceof Error ? reason.message : "Saved design could not be deleted");
     }
   };
-  const openOrderSheet = () => setSheet("order");
+  const openOrderSheet = () => {
+    setDesignsOpen(false);
+    setPrintOn(true);
+    setSheet("order");
+  };
   const dataUrlToBlob = async (dataUrl: string) => {
     const res = await fetch(dataUrl);
     return res.blob();
@@ -397,8 +589,7 @@ export default function Mockwear() {
         ),
         "Please call the customer to confirm price, print, and delivery/pickup.",
       ].join("\n");
-      const ownerPhone = (process.env.NEXT_PUBLIC_OWNER_WHATSAPP ?? "917470578448").replace(/\D/g, "");
-      whatsappWindow.location.href = `https://wa.me/${ownerPhone}?text=${encodeURIComponent(message)}`;
+      whatsappWindow.location.href = `https://wa.me/${OWNER_WHATSAPP}?text=${encodeURIComponent(message)}`;
       setSheet(null);
     } catch (error) {
       whatsappWindow.close();
@@ -423,78 +614,104 @@ export default function Mockwear() {
       const ext = blob.type === "image/webp" ? "webp" : blob.type === "image/jpeg" ? "jpg" : "png";
       eng.current?.addImageFile(new File([blob], `${design.id}.${ext}`, { type: blob.type || "image/png" }));
       setPrintOn(true);
+      setDesignsOpen(false);
       setSheet(null);
       showToast(`${design.title} added to ${ZONES[side].label}`);
     } catch (reason) {
       showToast(reason instanceof Error ? reason.message : "Artwork could not be added");
     }
   };
-  const filteredCatalog = catalogCategory === "All"
-    ? catalog
-    : catalog.filter((design) => design.category === catalogCategory);
+  const filteredCatalog = catalog.filter((design) => {
+    const matchesCategory = catalogCategory === "All"
+      || (catalogCategory === "Trending" ? design.popular : design.category === catalogCategory);
+    return matchesCategory && design.title.toLowerCase().includes(catalogSearch.trim().toLowerCase());
+  });
   const availableCategories = DESIGN_CATEGORIES.filter((category) =>
     catalog.some((design) => design.category === category),
   );
-  const popularDesigns = catalog.filter((design) => design.popular);
 
   /* ---------- render ---------- */
   return (
-    <div className="relative mx-auto max-w-[1120px] px-4 pb-[calc(28px+env(safe-area-inset-bottom))] pt-[22px] lg:px-10 lg:pb-11 lg:pt-[34px] min-[1300px]:max-w-[1240px]">
-      {/* hero */}
-      <div className="mb-[26px] flex items-center justify-between lg:mb-[34px]">
-        <span className="text-xs font-bold tracking-[.34em]">MOCKUP DESIGN</span>
-        <span className="text-xs tracking-[.12em] text-[#6f7163]">01 / 04</span>
-      </div>
-      <h1 className="text-[clamp(34px,7vw,66px)] font-extrabold leading-[1.02] tracking-[-.025em]">
-        Get the placement
-        <em className="block not-italic text-[#4d6a1f]">just right.</em>
-      </h1>
-      <p className="mb-[26px] mt-3 text-[clamp(13px,1.6vw,16px)] text-[#6f7163]">See how your artwork sits on the fabric.</p>
-      <div className="absolute bottom-[140px] left-2.5 hidden rotate-180 text-[10px] tracking-[.3em] text-[#6f7163] [writing-mode:vertical-rl] lg:block">
-        YOUR DESIGN. YOUR DETAILS.
-      </div>
-
-      {/* device */}
-      <section
-        className={`relative mx-auto grid max-w-[440px] grid-cols-1 gap-2.5 rounded-[30px] bg-[#0e0e0d] p-3 text-[#f1f0ea] shadow-[0_30px_70px_-20px_rgba(20,22,15,.45),0_0_0_6px_#1c1c1a] lg:h-[clamp(580px,76vh,760px)] lg:max-w-none lg:gap-3 lg:rounded-[34px] lg:p-4 ${
-          printOn
-            ? "lg:grid-cols-[minmax(0,1fr)_380px] lg:grid-rows-[auto_minmax(0,1fr)_auto_auto]"
-            : "lg:grid-cols-1 lg:grid-rows-[auto_minmax(0,1fr)_auto]"
-        }`}
-      >
-        {/* top bar */}
-        <div className="flex items-center justify-between px-0.5 pt-0.5 lg:col-span-full">
-          <IconBtn title="Reset view" onClick={() => eng.current?.resetView()}><Icon name="back" /></IconBtn>
-          <div className="flex gap-2">
-            <IconBtn title="Undo" onClick={() => eng.current?.undo()} disabled={!canUndo}><Icon name="undo" /></IconBtn>
-            <IconBtn title="Redo" onClick={() => eng.current?.redo()} disabled={!canRedo}><Icon name="redo" /></IconBtn>
-            <IconBtn title="Guides" onClick={() => setGridOn((v) => !v)} on={gridOn}><Icon name="grid" /></IconBtn>
-            <IconBtn title="Download PNG" onClick={exportPng}><Icon name="share" /></IconBtn>
-            <button
-              title="Confirm order"
-              onClick={openOrderSheet}
-              className="rounded-full bg-[#25D366] px-3.5 text-[12px] font-bold text-[#102015] transition hover:bg-[#36df78]"
-            >
-              WhatsApp Order
-            </button>
+    <div className="relative h-[100dvh] w-full overflow-hidden bg-[#090a14] text-[#f5f4ff]">
+      <input
+        ref={fileRef}
+        type="file"
+        accept="image/png,image/jpeg,image/webp,image/svg+xml"
+        multiple
+        className="hidden"
+        onChange={(event) => {
+          if (event.target.files) addFiles(event.target.files);
+          event.target.value = "";
+        }}
+      />
+      <header className="relative z-50 flex h-[68px] items-center justify-between border-b border-[#26283b] bg-[#0e101c]/95 px-2.5 sm:px-5">
+        <div className="flex min-w-0 items-center gap-2.5">
+          <div className="grid size-9 shrink-0 place-items-center rounded-xl bg-gradient-to-br from-[#4d16ff] to-[#a91dff] text-white shadow-[0_0_22px_#751dff77]">
+            <Icon name="shirt" />
+          </div>
+          <div className="min-w-0">
+            <b className="block truncate text-[15px] leading-tight sm:text-lg">
+              <span className="sm:hidden">Mockup</span>
+              <span className="hidden sm:inline">Mockup Design</span>
+            </b>
+            <span className="hidden text-[10px] text-[#9699af] sm:block">Design. Print. Wear.</span>
           </div>
         </div>
+        <div className="flex shrink-0 items-center gap-1.5 sm:gap-2">
+          <IconBtn title="Undo" onClick={() => eng.current?.undo()} disabled={!canUndo}><Icon name="undo" /></IconBtn>
+          <IconBtn title="Redo" onClick={() => eng.current?.redo()} disabled={!canRedo}><Icon name="redo" /></IconBtn>
+          <IconBtn title="Design library" onClick={() => { setSheet(null); setDesignsOpen((current) => !current); }} on={designsOpen}>
+            <Icon name="grid" />
+          </IconBtn>
+          <div className="hidden sm:block">
+            <IconBtn title="Download PNG" onClick={exportPng}><Icon name="download" /></IconBtn>
+          </div>
+          <button
+            type="button"
+            title="Save Design"
+            onClick={() => openSheet("saved")}
+            className="flex h-[38px] items-center justify-center gap-1.5 rounded-full bg-gradient-to-r from-[#5e19ff] to-[#a51eff] px-2.5 text-xs font-semibold text-white transition hover:brightness-110 sm:px-4"
+          >
+            <Icon name="save" className="size-4" />
+            <span className="hidden sm:inline">Save Design</span>
+          </button>
+          <button
+            type="button"
+            title="Confirm order"
+            onClick={openOrderSheet}
+            className="h-[38px] rounded-full bg-[#25d366] px-3 text-[11px] font-bold text-[#102015] transition hover:bg-[#36df78] sm:px-4 sm:text-xs"
+          >
+            <span className="sm:hidden">Order</span>
+            <span className="hidden sm:inline">Order on WhatsApp</span>
+          </button>
+        </div>
+      </header>
+
+      <main className="relative h-[calc(100dvh-68px)] overflow-hidden">
 
         {/* 3D viewer */}
         <div
           ref={viewRef}
-          className={`relative h-[min(52vh,400px)] min-h-[300px] overflow-hidden rounded-[18px] bg-[radial-gradient(ellipse_at_50%_38%,#34342f_0%,#1a1a18_55%,#0c0c0b_100%)] lg:h-auto lg:min-h-0 ${
-            printOn ? "lg:row-span-2" : ""
-          }`}
+          className="absolute inset-0 overflow-hidden bg-[radial-gradient(ellipse_at_50%_42%,#24253b_0%,#11131f_48%,#080912_100%)]"
         >
           {!ready && (
             <div className="pointer-events-none absolute inset-0 grid place-items-center text-[13px] text-[#9a9a90]">
               {error ?? "Loading 3D model…"}
             </div>
           )}
-          <div className="pointer-events-none absolute bottom-2.5 left-3 text-[11px] text-[#8d8d84]">Drag to rotate · Scroll to zoom</div>
-          <div className="pointer-events-none absolute right-3 top-3 rounded-full border border-white/15 bg-black/60 px-2.5 py-[5px] text-[11px] font-semibold uppercase tracking-[.08em] text-white">
-            {ZONES[side].label}
+          <div className="pointer-events-none absolute bottom-4 left-3 text-[11px] text-[#9699af] md:left-[94px]">Drag to rotate · Scroll to zoom</div>
+          <div className="absolute bottom-3 left-1/2 z-10 flex -translate-x-1/2 items-center gap-2 rounded-full border border-[#32344a] bg-[#111321]/90 px-2 py-1.5 shadow-[0_8px_24px_#0008] md:bottom-5">
+            <IconBtn title="Zoom out" onClick={() => eng.current?.zoomOut()}><Icon name="zoomOut" className="size-4" /></IconBtn>
+            <span className="min-w-[48px] text-center text-xs font-semibold text-[#d8d9eb]">{zoomPercent}%</span>
+            <IconBtn
+              title="Zoom in"
+              onClick={() => {
+                eng.current?.zoomIn();
+                setZoomPercent((current) => Math.min(current + 20, 200));
+              }}
+            >
+              <Icon name="zoomIn" className="size-4" />
+            </IconBtn>
           </div>
         </div>
 
@@ -522,15 +739,275 @@ export default function Mockwear() {
             setPlaceDragOver(false);
             if (e.dataTransfer.files.length) addFilesAt(e.dataTransfer.files, e.clientX, e.clientY);
           }}
-          className={`relative h-[270px] place-items-center overflow-hidden rounded-[18px] border border-[#2d2d2a] bg-[#121211] lg:h-auto lg:min-h-0 ${
-            printOn ? "grid" : "hidden"
-          } ${gridOn ? "guides" : ""}`}
+          className={`absolute right-2 top-auto bottom-[150px] z-20 flex h-[min(48vh,420px)] w-[calc(100%-1rem)] flex-col overflow-hidden rounded-[24px] sm:right-4 sm:w-[min(360px,calc(100%-2rem))] md:top-4 md:bottom-4 md:h-auto md:w-[340px] ${
+            printOn
+              ? "border border-[#2d3045] bg-[#10121f]/95 shadow-[0_24px_70px_#000b] backdrop-blur-xl"
+              : "pointer-events-none border-transparent bg-transparent shadow-none backdrop-blur-none"
+          } ${gridOn && printOn ? "guides" : ""}`}
         >
-          <div className="pointer-events-none absolute left-3 top-2.5 text-[10px] uppercase tracking-[.16em] text-[#9a9a90]">
-            Placement · {ZONES[side].label}
+          <div className={`pointer-events-auto flex h-12 shrink-0 items-center gap-2 px-3 ${printOn ? "border-b border-[#26283b]" : "justify-end"}`}>
+            {printOn && (
+              <div className="grid min-w-0 flex-1 grid-cols-2 gap-2">
+                {SIDES.map((k) => (
+                  <button
+                    key={k}
+                    type="button"
+                    onClick={() => setSide(k)}
+                    aria-pressed={side === k}
+                    className={`rounded-full px-3 py-2 text-xs font-semibold transition ${
+                      side === k
+                        ? "bg-gradient-to-r from-[#5e19ff] to-[#842bff] text-white shadow-[0_0_16px_#702aff66]"
+                        : "bg-[#202235] text-[#b8b9cc] hover:bg-[#292c43]"
+                    }`}
+                  >
+                    {ZONES[k].label}
+                  </button>
+                ))}
+              </div>
+            )}
+            {printOn && (
+              <IconBtn title="Guides" onClick={() => setGridOn((current) => !current)} on={gridOn}>
+                <Icon name="grid" className="size-4" />
+              </IconBtn>
+            )}
+            <IconBtn
+              title={printOn ? "Close design placement" : "Open design placement"}
+              onClick={() => {
+                setContextMenu(null);
+                if (printOn) setSheet(null);
+                setPrintOn((current) => !current);
+              }}
+            >
+              <Icon name={printOn ? "close" : "shirt"} className="size-4" />
+            </IconBtn>
           </div>
-          <div ref={stageRef} className="relative grid place-items-center" />
-          {placeDragOver && (
+          <div
+            ref={stageRef}
+            onPointerDown={() => setContextMenu(null)}
+            className={printOn ? "relative grid min-h-[128px] flex-1 place-items-center overflow-hidden bg-[radial-gradient(ellipse_at_50%_45%,#202237_0%,#111321_70%)]" : "hidden"}
+          />
+          {printOn && sel && (
+            <div
+              ref={contextToolbarRef}
+              style={{ left: toolbarPosition.left, top: toolbarPosition.top }}
+              className="absolute z-30"
+              onPointerDown={(event) => event.stopPropagation()}
+            >
+              <input
+                ref={replaceFileRef}
+                type="file"
+                accept="image/png,image/jpeg,image/webp,image/svg+xml"
+                className="hidden"
+                onChange={(event) => {
+                  const file = event.target.files?.[0];
+                  if (file) replaceImage(file);
+                  event.target.value = "";
+                }}
+              />
+              <div className="flex items-center gap-0.5 rounded-xl border border-[#deded6] bg-white p-1 shadow-[0_8px_24px_#0004]">
+                {sel.kind === "image" && (
+                  <>
+                    <ContextIconButton
+                      title="Remove background"
+                      onClick={() => {
+                        setSheet("edit");
+                        setContextMenu(null);
+                        const engine = eng.current;
+                        if (!engine) return;
+                        void engine.bgAuto().catch((reason: unknown) => {
+                          console.error(reason);
+                          showToast(reason instanceof Error ? reason.message : "Could not remove the image background");
+                        });
+                      }}
+                    >
+                      <Icon name="removeBackground" className="size-4" />
+                    </ContextIconButton>
+                    <ContextIconButton title="Replace image" onClick={() => replaceFileRef.current?.click()}>
+                      <Icon name="replace" className="size-4" />
+                    </ContextIconButton>
+                  </>
+                )}
+                <ContextIconButton
+                  title="Arrange: align, position, size, rotate"
+                  active={contextMenu === "arrange"}
+                  onClick={() => setContextMenu((current) => current === "arrange" ? null : "arrange")}
+                >
+                  <Icon name="sizePosition" className="size-4" />
+                </ContextIconButton>
+                <span className="mx-0.5 h-5 w-px bg-[#deded6]" aria-hidden="true" />
+                <ContextIconButton
+                  title="Layers"
+                  active={contextMenu === "layers"}
+                  onClick={() => setContextMenu((current) => current === "layers" ? null : "layers")}
+                >
+                  <Icon name="layers" className="size-4" />
+                </ContextIconButton>
+                <ContextIconButton title="Duplicate" onClick={() => eng.current?.duplicate()}>
+                  <Icon name="duplicate" className="size-4" />
+                </ContextIconButton>
+                <ContextIconButton title="Delete" onClick={() => eng.current?.deleteSelected()}>
+                  <Icon name="delete" className="size-4" />
+                </ContextIconButton>
+                <span className="mx-0.5 h-5 w-px bg-[#deded6]" aria-hidden="true" />
+                <ContextIconButton
+                  title="More actions"
+                  active={contextMenu === "more"}
+                  onClick={() => setContextMenu((current) => current === "more" ? null : "more")}
+                >
+                  <Icon name="more" className="size-4" />
+                </ContextIconButton>
+              </div>
+
+              {contextMenu && (
+                <div className={`absolute left-0 top-full z-40 mt-1 overflow-y-auto rounded-xl border border-[#30334a] bg-[#111321] text-sm text-[#e7e8f4] shadow-[0_12px_30px_#000b] ${
+                  contextMenu === "arrange"
+                    ? "max-h-[min(60vh,420px)] w-[min(320px,calc(100vw-24px))] p-3"
+                    : "max-h-[min(55vh,320px)] min-w-[200px] p-1"
+                }`}>
+                  {contextMenu === "layers" ? (
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => { eng.current?.forward(); setContextMenu(null); }}
+                        className="w-full rounded-lg px-3 py-2 text-left hover:bg-white/10"
+                      >
+                        Bring forward
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => { eng.current?.backward(); setContextMenu(null); }}
+                        className="w-full rounded-lg px-3 py-2 text-left hover:bg-white/10"
+                      >
+                        Send backward
+                      </button>
+                    </>
+                  ) : contextMenu === "arrange" ? (
+                    <div className="space-y-3">
+                      <div>
+                        <SecTitle>Align</SecTitle>
+                        <div className="flex items-center justify-between gap-1">
+                          {([
+                            ["left", "alignLeft"],
+                            ["centerX", "alignCenter"],
+                            ["right", "alignRight"],
+                            ["top", "alignTop"],
+                            ["centerY", "alignMiddle"],
+                            ["bottom", "alignBottom"],
+                          ] as const).map(([alignment, icon]) => (
+                            <button
+                              key={alignment}
+                              type="button"
+                              title={`Align ${alignment}`}
+                              onClick={() => eng.current?.align(alignment)}
+                              className="grid size-8 shrink-0 place-items-center rounded-lg border border-[#34364a] bg-[#1a1c2b] text-[#d9d9e8] hover:border-[#8d4bff] hover:bg-[#27223a]"
+                            >
+                              <Icon name={icon} className="size-4" />
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                      <div className="grid grid-cols-2 gap-2">
+                        {([
+                          ["x", "Position X", sel.x],
+                          ["y", "Position Y", sel.y],
+                          ["width", "Width", sel.width],
+                          ["height", "Height", sel.height],
+                        ] as const).map(([fieldName, label, value]) => (
+                          <label key={fieldName} className="text-[11px] font-medium text-[#aeb0c4]">
+                            {label}
+                            <input
+                              type="number"
+                              min={fieldName === "width" || fieldName === "height" ? 1 : 0}
+                              value={Math.round(value)}
+                              disabled={sel.locked}
+                              onChange={(event) => {
+                                const nextValue = Number(event.target.value);
+                                if (Number.isFinite(nextValue)) updateSelectedGeometry(fieldName, nextValue);
+                              }}
+                              onBlur={() => eng.current?.commit()}
+                              className={`${input} mt-1 w-full py-1.5 text-xs disabled:opacity-50`}
+                            />
+                          </label>
+                        ))}
+                      </div>
+                      <label className="flex items-center gap-2 text-[11px] text-[#aeb0c4]">
+                        Rotate
+                        <input
+                          type="range"
+                          min={-180}
+                          max={180}
+                          value={sel.angle}
+                          disabled={sel.locked}
+                          onChange={(event) => eng.current?.setAngle(Number(event.target.value))}
+                          onPointerUp={() => eng.current?.commit()}
+                          onKeyUp={() => eng.current?.commit()}
+                          className="min-w-0 flex-1 accent-[#862dff]"
+                        />
+                        <span className="w-9 text-right text-[#e3e3ef]">{sel.angle}°</span>
+                      </label>
+                    </div>
+                  ) : (
+                    <div className="space-y-1">
+                      {sel.kind === "text" && (
+                        <button
+                          type="button"
+                          onClick={() => { setSheet("edit"); setContextMenu(null); }}
+                          className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left hover:bg-white/10"
+                        >
+                          <Icon name="edit" className="size-4" />
+                          Edit text
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => { eng.current?.toggleLock(); setContextMenu(null); }}
+                        className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left hover:bg-white/10"
+                      >
+                        <Icon name={sel.locked ? "unlock" : "lock"} className="size-4" />
+                        {sel.locked ? "Unlock" : "Lock"}
+                      </button>
+                      <label className="flex items-center gap-2 px-3 py-2 text-[11px] text-[#c4c6da]">
+                        <Icon name="transparency" className="size-4" />
+                        Opacity
+                        <input
+                          type="range"
+                          min={0}
+                          max={100}
+                          value={sel.opacity}
+                          onChange={(event) => {
+                            const opacity = Number(event.target.value);
+                            setSel({ ...sel, opacity });
+                            eng.current?.setOpacity(opacity);
+                          }}
+                          onPointerUp={() => eng.current?.commit()}
+                          onKeyUp={() => eng.current?.commit()}
+                          className="min-w-0 flex-1 accent-[#862dff]"
+                        />
+                        <span className="w-8 text-right">{sel.opacity}%</span>
+                      </label>
+                      <button
+                        type="button"
+                        onClick={() => { eng.current?.mirror(); setContextMenu(null); }}
+                        className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left hover:bg-white/10"
+                      >
+                        <Icon name="flipHorizontal" className="size-4" />
+                        Flip horizontal
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => { eng.current?.flipVertical(); setContextMenu(null); }}
+                        className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left hover:bg-white/10"
+                      >
+                        <Icon name="flipVertical" className="size-4" />
+                        Flip vertical
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+          {printOn && placeDragOver && (
             <div className="pointer-events-none absolute inset-3 z-20 grid place-items-center rounded-[14px] border-2 border-dashed border-white bg-black/75 text-center">
               <div>
                 <div className="mx-auto mb-2 grid size-10 place-items-center rounded-full bg-white text-xl text-[#111]">+</div>
@@ -538,37 +1015,109 @@ export default function Mockwear() {
               </div>
             </div>
           )}
-          <div className="absolute inset-x-2 bottom-2 z-10 flex flex-wrap justify-center gap-1.5">
-            {SIDES.map((k) => (
-              <button
-                key={k}
-                onClick={() => setSide(k)}
-                aria-pressed={side === k}
-                className={`rounded-full px-3 py-1 text-[11px] font-semibold transition ${
-                  side === k ? "bg-white text-[#111]" : "bg-[#242422] text-[#9a9a90] hover:text-[#f1f0ea]"
-                }`}
-              >
-                {ZONES[k].label}
-              </button>
-            ))}
-          </div>
         </div>
 
-        <div className={printOn ? "" : "hidden"}>
-          <button
-            onClick={() => eng.current?.deleteSelected()}
-            className="h-[52px] w-full rounded-[14px] bg-[#ee5a2b] text-base font-bold text-white transition hover:bg-[#d94a1d] active:scale-[.985]"
-          >
-            Delete
-          </button>
-        </div>
+        <nav className="absolute bottom-2 left-2 right-2 z-40 grid grid-cols-8 gap-0.5 rounded-2xl border border-[#26283b] bg-[#10121f]/95 p-1.5 shadow-[0_12px_30px_#0008] backdrop-blur-xl md:bottom-4 md:left-3 md:right-auto md:top-4 md:flex md:w-[72px] md:flex-col md:justify-start md:gap-1 md:overflow-y-auto">
+          {TOOLS.map((tool) => (
+            <button
+              key={tool.name}
+              type="button"
+              onClick={() => onTool(tool.name)}
+              aria-pressed={isOn(tool.name)}
+              className={`flex min-w-0 flex-col items-center justify-center gap-1 rounded-xl px-0.5 py-1.5 text-[8px] font-semibold transition sm:text-[9px] md:min-h-[56px] md:w-full md:text-[10px] ${
+                isOn(tool.name)
+                  ? "bg-gradient-to-r from-[#5e19ff] to-[#842bff] text-white shadow-[0_0_16px_#702aff55]"
+                  : "text-[#aeb0c4] hover:bg-white/5 hover:text-white"
+              }`}
+            >
+              <Icon name={tool.icon} className="size-[18px] md:size-5" />
+              <span className="truncate leading-none">{tool.label}</span>
+            </button>
+          ))}
+        </nav>
+
+        {designsOpen && (
+          <aside className="absolute inset-x-2 top-2 bottom-[148px] z-40 flex flex-col overflow-hidden rounded-[24px] border border-[#2d3045] bg-[#10121f]/95 shadow-[0_24px_70px_#000b] backdrop-blur-xl md:inset-x-auto md:left-[92px] md:top-4 md:bottom-4 md:w-[320px]">
+            <div className="flex h-14 shrink-0 items-center justify-between border-b border-[#26283b] px-4">
+              <div>
+                <h2 className="text-base font-bold">Design Library</h2>
+                <p className="text-[10px] text-[#9092a8]">{catalog.length} designs available</p>
+              </div>
+              <IconBtn title="Close design library" onClick={() => setDesignsOpen(false)}>
+                <Icon name="close" className="size-4" />
+              </IconBtn>
+            </div>
+            <label className="relative mx-3 mt-3 block shrink-0">
+              <Icon name="search" className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-[#9294aa]" />
+              <input
+                value={catalogSearch}
+                onChange={(event) => setCatalogSearch(event.target.value)}
+                placeholder="Search designs..."
+                aria-label="Search designs"
+                className={`${input} w-full pl-9`}
+              />
+            </label>
+            <div className="mt-3 flex shrink-0 gap-1.5 overflow-x-auto px-3 pb-1">
+              {["All", "Trending", ...availableCategories].filter((category, index, list) => list.indexOf(category) === index).map((category) => (
+                <button
+                  key={category}
+                  type="button"
+                  onClick={() => setCatalogCategory(category)}
+                  aria-pressed={catalogCategory === category}
+                  className={`shrink-0 rounded-full px-3 py-1.5 text-[10px] font-semibold transition ${
+                    catalogCategory === category
+                      ? "bg-[#661cff] text-white shadow-[0_0_14px_#702aff66]"
+                      : "bg-[#202235] text-[#b8b9cc] hover:bg-[#292c43]"
+                  }`}
+                >
+                  {category}
+                </button>
+              ))}
+            </div>
+            <div className="min-h-0 flex-1 overflow-y-auto px-3 pb-3 pt-2">
+              {catalogLoading && <p className="py-8 text-center text-xs text-[#9699af]">Loading designs...</p>}
+              {catalogError && <p role="alert" className="rounded-xl bg-red-950/60 p-3 text-xs text-red-200">{catalogError}</p>}
+              {!catalogLoading && !catalogError && filteredCatalog.length === 0 && (
+                <div className="py-10 text-center">
+                  <p className="text-sm font-semibold">No designs found</p>
+                  <p className="mt-1 text-xs text-[#9294aa]">Try another search or category.</p>
+                </div>
+              )}
+              {!catalogLoading && !catalogError && filteredCatalog.length > 0 && (
+                <div className="grid grid-cols-2 gap-2.5">
+                  {filteredCatalog.map((design) => (
+                    <button
+                      key={design.id}
+                      type="button"
+                      onClick={() => void addCatalogDesign(design)}
+                      className="group overflow-hidden rounded-2xl border border-[#292c40] bg-[#171927] text-left transition hover:border-[#8a45ff] hover:shadow-[0_0_18px_#702aff33]"
+                    >
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img src={design.imageUrl} alt={design.title} className="aspect-square w-full bg-[#1d2030] object-contain p-3" />
+                      <span className="block truncate px-2.5 py-2 text-[11px] font-semibold text-[#edecf8]">{design.title}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+            <div className="shrink-0 border-t border-[#26283b] p-3">
+              <button type="button" onClick={() => openSheet("add")} className={`${btnPri} flex w-full items-center justify-center gap-2`}>
+                <Icon name="upload" className="size-4" />
+                Upload your own design
+              </button>
+              <Link href="/admin" className="mt-2 block text-center text-[10px] text-[#aeb0c4] hover:text-white">
+                Admin design upload
+              </Link>
+            </div>
+          </aside>
+        )}
 
         {/* sheet */}
         {sheet && (
-          <div className="absolute inset-x-3 bottom-[84px] z-20 mx-auto max-h-[62%] max-w-[560px] overflow-auto rounded-[18px] border border-[#3a3a36] bg-[#1d1d1b] p-3.5 shadow-[0_20px_50px_#000a] lg:bottom-[94px]">
-            <div className="mb-3 flex items-center justify-between">
-              <b className="text-xs uppercase tracking-[.14em] text-[#9a9a90]">{SHEET_TITLE[sheet]}</b>
-              <button onClick={() => setSheet(null)} aria-label="Close" className="size-[30px] rounded-full bg-[#2a2a27]">✕</button>
+          <div className="absolute left-1/2 top-1/2 z-50 max-h-[calc(100%-24px)] w-[min(520px,calc(100%-24px))] -translate-x-1/2 -translate-y-1/2 overflow-auto rounded-[24px] border border-[#2d3045] bg-[#111321]/98 p-4 shadow-[0_24px_70px_#000d] backdrop-blur-xl">
+            <div className="mb-4 flex items-center justify-between border-b border-[#26283b] pb-3">
+              <b className="text-sm font-bold">{SHEET_TITLE[sheet]}</b>
+              <IconBtn title="Close panel" onClick={() => setSheet(null)}><Icon name="close" className="size-4" /></IconBtn>
             </div>
 
             {sheet === "saved" && (
@@ -595,7 +1144,7 @@ export default function Mockwear() {
                   <p className="text-xs text-[#9a9a90]">No saved designs yet. Save the current shirt design to find it here.</p>
                 )}
                 {!savedLoading && savedDesigns.map((design) => (
-                  <div key={design.id} className="flex items-center gap-2 rounded-xl border border-[#3a3a36] bg-[#171715] p-2">
+                  <div key={design.id} className="flex items-center gap-2 rounded-xl border border-[#2d3045] bg-[#171927] p-2">
                     <button
                       type="button"
                       onClick={() => void loadSavedDesign(design)}
@@ -630,7 +1179,7 @@ export default function Mockwear() {
                       aria-label={c}
                       onClick={() => pickColor(c)}
                       style={{ background: c }}
-                      className={`size-[34px] rounded-full border-2 border-white/30 ${color === c ? "outline-2 outline-offset-2 outline-white" : ""}`}
+                      className={`size-[34px] rounded-full border-2 border-white/30 ${color === c ? "outline-2 outline-offset-2 outline-[#923dff]" : ""}`}
                     />
                   ))}
                 </div>
@@ -643,8 +1192,28 @@ export default function Mockwear() {
 
             {sheet === "add" && (
               <div>
-                <input ref={fileRef} type="file" accept="image/png,image/jpeg,image/webp,image/svg+xml" multiple hidden
-                  onChange={(e) => { if (e.target.files) addFiles(e.target.files); e.target.value = ""; }} />
+                <p className="mb-2 text-xs text-[#9a9a90]">
+                  {uploadAccess === "checking"
+                    ? "Checking upload access..."
+                    : uploadAccess === "admin"
+                      ? "Admin account · unlimited custom uploads"
+                      : `Custom uploads used: ${customUploadCount}/${CUSTOM_UPLOAD_LIMIT}`}
+                </p>
+                {uploadQuotaError && <p role="alert" className="mb-2 text-xs text-red-300">{uploadQuotaError}</p>}
+                {uploadAccess === "customer" && customUploadCount >= CUSTOM_UPLOAD_LIMIT && (
+                  <p className="mb-3 rounded-lg bg-white/10 px-3 py-2 text-xs leading-relaxed text-[#f1f0ea]">
+                    You’ve used all {CUSTOM_UPLOAD_LIMIT} custom uploads.{" "}
+                    <a
+                      href={`https://wa.me/${OWNER_WHATSAPP}?text=${encodeURIComponent("Hi, I would like to add more custom designs to my T-shirt mockup.")}`}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="font-semibold underline underline-offset-2"
+                    >
+                      Contact us on WhatsApp
+                    </a>{" "}
+                    to add more.
+                  </p>
+                )}
                 <div
                   tabIndex={0}
                   onClick={() => fileRef.current?.click()}
@@ -653,25 +1222,50 @@ export default function Mockwear() {
                   onDragLeave={() => setDragOver(false)}
                   onDrop={(e) => { e.preventDefault(); setDragOver(false); addFiles(e.dataTransfer.files); }}
                   className={`flex cursor-pointer flex-col items-center gap-1.5 rounded-[14px] border-2 border-dashed px-3 py-[22px] text-center transition ${
-                    dragOver ? "border-white bg-white/5" : "border-[#4a4a44] hover:border-white hover:bg-white/5"
+                    dragOver ? "border-white bg-white/5"                     : "border-[#4a4a44] hover:border-[#9b58ff] hover:bg-[#7a35ff]/5"
                   }`}
                 >
-                  <div className="grid size-[38px] place-items-center rounded-full bg-white text-[22px] leading-none text-[#111]">+</div>
+                  <div className="grid size-[38px] place-items-center rounded-full bg-gradient-to-r from-[#5e19ff] to-[#a51eff] text-[22px] leading-none text-white">+</div>
                   <b className="text-sm">Upload artwork</b>
                   <small className="text-xs text-[#9a9a90]">Click, drag &amp; drop or paste (Ctrl+V) · PNG, JPG, WebP, SVG · transparent PNG is best</small>
                 </div>
-                <Sep />
-                <SecTitle>Text</SecTitle>
+              </div>
+            )}
+
+            {sheet === "text" && (
+              <div className="space-y-3">
+                <input
+                  className={`${input} w-full`}
+                  value={txt}
+                  onChange={(event) => setTxt(event.target.value)}
+                  placeholder="Your text"
+                  aria-label="Text to add"
+                />
                 <div className="flex gap-2">
-                  <input className={`${input} flex-1`} value={txt} onChange={(e) => setTxt(e.target.value)} placeholder="Your text" />
-                  <input type="color" value={txtCol} onChange={(e) => setTxtCol(e.target.value)} className={colorInput} />
-                </div>
-                <div className="mt-2.5 flex gap-2">
-                  <select className={input} value={txtFont} onChange={(e) => setTxtFont(e.target.value)}>
-                    {FONTS.map((f) => <option key={f}>{f}</option>)}
+                  <select className={`${input} min-w-0 flex-1`} value={txtFont} onChange={(event) => setTxtFont(event.target.value)}>
+                    {FONTS.map((font) => <option key={font}>{font}</option>)}
                   </select>
-                  <button className={btnPri} onClick={() => { eng.current?.addText(txt, txtFont, txtCol); setSheet(null); }}>Add text</button>
+                  <input type="color" value={txtCol} onChange={(event) => setTxtCol(event.target.value)} className={colorInput} aria-label="Text color" />
                 </div>
+                <button
+                  type="button"
+                  className={`${btnPri} w-full`}
+                  onClick={() => {
+                    eng.current?.addText(txt, txtFont, txtCol);
+                    setPrintOn(true);
+                    setSheet(null);
+                  }}
+                >
+                  Add text to shirt
+                </button>
+              </div>
+            )}
+
+            {sheet === "help" && (
+              <div className="space-y-3 text-sm text-[#c3c4d5]">
+                <p>Choose a design from the library or upload your own artwork, then drag it into position on the shirt.</p>
+                <p>Select artwork to align, resize, rotate, lock, duplicate, or delete it in the Design Placement panel.</p>
+                <p>Use Front and Back to edit each side. Save Design stores your work in this browser.</p>
               </div>
             )}
 
@@ -723,24 +1317,6 @@ export default function Mockwear() {
                   </>
                 )}
 
-                {sel && (
-                  <>
-                    <SecTitle>Arrange</SecTitle>
-                    <label className="flex items-center gap-2.5 text-xs text-[#9a9a90]">
-                      Opacity
-                      <input type="range" min={5} max={100} value={sel.opacity} className="flex-1 accent-white"
-                        onChange={(e) => { const v = Number(e.target.value); setSel({ ...sel, opacity: v }); eng.current?.setOpacity(v); }}
-                        onPointerUp={() => eng.current?.commit()} onKeyUp={() => eng.current?.commit()} />
-                    </label>
-                    <div className="mt-2.5 flex flex-wrap gap-2">
-                      <button className={btn} onClick={() => eng.current?.mirror()}>Mirror</button>
-                      <button className={btn} onClick={() => eng.current?.center()}>Center</button>
-                      <button className={btn} onClick={() => eng.current?.duplicate()}>Duplicate</button>
-                      <button className={btn} onClick={() => eng.current?.forward()}>Forward</button>
-                      <button className={btn} onClick={() => eng.current?.backward()}>Backward</button>
-                    </div>
-                  </>
-                )}
               </div>
             )}
 
@@ -822,136 +1398,7 @@ export default function Mockwear() {
           </div>
         )}
 
-        {/* toolbar */}
-        <nav className="grid grid-cols-9 gap-1 rounded-[18px] border border-[#2d2d2a] bg-[#181816] p-1.5 lg:col-span-full lg:w-full lg:max-w-[800px] lg:justify-self-center">
-          {TOOLS.map((t) => (
-            <button
-              key={t.name}
-              onClick={() => onTool(t.name)}
-              className={`flex min-w-0 flex-col items-center gap-1 rounded-xl pb-1.5 pt-2 text-[10px] font-semibold transition lg:pb-2 lg:pt-2.5 lg:text-[11px] ${
-                isOn(t.name) ? "bg-white text-[#111]" : "text-[#9a9a90] hover:bg-white/5 hover:text-[#f1f0ea]"
-              }`}
-            >
-              <Icon name={t.icon} />
-              <span className="leading-none">{t.label}</span>
-            </button>
-          ))}
-        </nav>
-      </section>
-
-      <section
-        id="design-library"
-        className="mx-auto mt-10 max-w-[1120px] scroll-mt-6 rounded-[24px] border border-[#deddd4] bg-white p-5 shadow-[0_16px_50px_-35px_#30302066] sm:p-7 lg:mt-14"
-      >
-        <div className="flex flex-wrap items-end justify-between gap-4">
-          <div>
-            <p className="text-[10px] font-bold uppercase tracking-[.2em] text-[#75805e]">Design library</p>
-            <h2 className="mt-1 text-2xl font-bold tracking-tight sm:text-3xl">Pick a design for your shirt</h2>
-            <p className="mt-1 text-sm text-[#77776e]">Tap any artwork to add it to the selected shirt side.</p>
-          </div>
-          <Link href="/admin" className="rounded-full border border-[#deddd4] px-4 py-2 text-xs font-semibold text-[#4d6a1f] transition hover:border-[#4d6a1f]">
-            Admin upload
-          </Link>
-        </div>
-
-        {catalogLoading && <p className="mt-6 text-sm text-[#77776e]">Loading designs...</p>}
-        {catalogError && <p role="alert" className="mt-6 rounded-xl bg-red-50 px-4 py-3 text-sm text-red-700">{catalogError}</p>}
-        {!catalogLoading && !catalogError && catalog.length === 0 && (
-          <div className="mt-6 rounded-xl border border-dashed border-[#d6d5cd] px-4 py-10 text-center">
-            <p className="text-sm font-semibold">No designs available yet</p>
-            <p className="mt-1 text-xs text-[#77776e]">Admin se upload kiye designs yahan category-wise dikhengay.</p>
-          </div>
-        )}
-        {!catalogLoading && !catalogError && catalog.length > 0 && (
-          <>
-            <div className="mt-6 flex gap-2 overflow-x-auto pb-1">
-              {["All", ...availableCategories].map((item) => (
-                <button
-                  key={item}
-                  type="button"
-                  onClick={() => setCatalogCategory(item)}
-                  className={`shrink-0 rounded-full px-4 py-2 text-xs font-semibold transition ${
-                    catalogCategory === item ? "bg-[#171713] text-white" : "border border-[#e2e1d9] text-[#66665d] hover:border-[#99998f]"
-                  }`}
-                >
-                  {item}
-                </button>
-              ))}
-            </div>
-
-            <div className="mt-7 space-y-8">
-              {catalogCategory === "All"
-                ? availableCategories.map((category) => {
-                  const categoryDesigns = catalog.filter((design) => design.category === category);
-                  return (
-                    <section key={category}>
-                      <h3 className="mb-3 text-sm font-bold">{category}</h3>
-                      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
-                        {categoryDesigns.map((design) => (
-                          <button
-                            key={design.id}
-                            type="button"
-                            onClick={() => void addCatalogDesign(design)}
-                            className="overflow-hidden rounded-[16px] border border-[#e7e6df] bg-white text-left transition hover:-translate-y-0.5 hover:border-[#858c71] hover:shadow-md"
-                          >
-                            {/* eslint-disable-next-line @next/next/no-img-element */}
-                            <img src={design.imageUrl} alt={design.title} className="aspect-square w-full bg-[#f5f4ef] object-contain p-4" />
-                            <span className="block truncate px-3 py-2.5 text-xs font-semibold">{design.title}</span>
-                          </button>
-                        ))}
-                      </div>
-                    </section>
-                  );
-                })
-                : (
-                  <section>
-                    <h3 className="mb-3 text-sm font-bold">{catalogCategory}</h3>
-                    <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
-                      {filteredCatalog.map((design) => (
-                        <button
-                          key={design.id}
-                          type="button"
-                          onClick={() => void addCatalogDesign(design)}
-                          className="overflow-hidden rounded-[16px] border border-[#e7e6df] bg-white text-left transition hover:-translate-y-0.5 hover:border-[#858c71] hover:shadow-md"
-                        >
-                          {/* eslint-disable-next-line @next/next/no-img-element */}
-                          <img src={design.imageUrl} alt={design.title} className="aspect-square w-full bg-[#f5f4ef] object-contain p-4" />
-                          <span className="block truncate px-3 py-2.5 text-xs font-semibold">{design.title}</span>
-                        </button>
-                      ))}
-                    </div>
-                  </section>
-                )}
-              {catalogCategory === "All" && availableCategories.length === 0 && (
-                <p className="text-sm text-[#77776e]">Uploaded designs do not have a recognized category.</p>
-              )}
-            </div>
-
-            {popularDesigns.length > 0 && (
-              <section className="mt-9 border-t border-[#e8e7e0] pt-6">
-                <div className="mb-3 flex items-center gap-2">
-                  <h3 className="text-sm font-bold">Popular designs</h3>
-                  <span className="rounded-full bg-[#f2f3ed] px-2 py-1 text-[9px] font-bold uppercase tracking-wider text-[#68764b]">Trending</span>
-                </div>
-                <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
-                  {popularDesigns.map((design) => (
-                    <button
-                      key={design.id}
-                      type="button"
-                      onClick={() => void addCatalogDesign(design)}
-                      className="overflow-hidden rounded-[16px] border border-[#e7e6df] bg-white text-left transition hover:-translate-y-0.5 hover:border-[#858c71] hover:shadow-md"
-                    >
-                      {/* eslint-disable-next-line @next/next/no-img-element */}
-                      <img src={design.imageUrl} alt={design.title} className="aspect-square w-full bg-[#f5f4ef] object-contain p-4" />
-                      <span className="block truncate px-3 py-2.5 text-xs font-semibold">{design.title}</span>
-                    </button>
-                  ))}
-                </div>
-              </section>
-            )}
-          </>
-        )}
-      </section>
+      </main>
 
       <div
         className={`pointer-events-none fixed bottom-6 left-1/2 z-50 -translate-x-1/2 rounded-full bg-[#111] px-4 py-2.5 text-[13px] text-white transition ${
