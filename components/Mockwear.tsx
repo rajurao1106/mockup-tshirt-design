@@ -7,8 +7,9 @@ import { DESIGN_CATEGORIES, type CatalogDesign } from "@/lib/designCatalog";
 import { deleteSavedDesign, listSavedDesigns, loadDesign, saveDesign, type SavedDesignSummary } from "@/lib/savedDesigns";
 import { Icon, type IconName } from "./icons";
 
-type SheetName = "color" | "add" | "text" | "edit" | "help" | "order" | "saved";
+type SheetName = "edit" | "help" | "order" | "saved";
 type ToolName = "color" | "add" | "designs" | "text" | "upload" | "saved" | "spin" | "help";
+type AsidePanelName = "color" | "add" | "text";
 type ContextMenuName = "arrange" | "layers" | "more";
 
 const SWATCHES = ["#efede8", "#1a1a1a", "#3d3d3a", "#e11d48", "#2563eb", "#16a34a", "#f59e0b", "#7c3aed", "#9ca3af", "#0f766e"];
@@ -22,14 +23,10 @@ const TOOLS: { name: ToolName; label: string; icon: IconName }[] = [
   { name: "add", label: "Add", icon: "add" },
   { name: "text", label: "Text", icon: "text" },
   { name: "upload", label: "Upload", icon: "upload" },
-  { name: "saved", label: "Save", icon: "save" },
   { name: "spin", label: "Spin", icon: "spin" },
   { name: "help", label: "Help", icon: "help" },
 ];
 const SHEET_TITLE: Record<SheetName, string> = {
-  color: "Shirt color",
-  add: "Add design",
-  text: "Add text",
   edit: "Edit selected",
   help: "Editor help",
   order: "Confirm mockup order",
@@ -117,6 +114,7 @@ export default function Mockwear() {
   const [gridOn, setGridOn] = useState(false);
   const [zoomPercent, setZoomPercent] = useState(100);
   const [designsOpen, setDesignsOpen] = useState(false);
+  const [asidePanel, setAsidePanel] = useState<AsidePanelName | null>(null);
   const [canUndo, setCanUndo] = useState(false);
   const [canRedo, setCanRedo] = useState(false);
   const [sel, setSel] = useState<SelInfo | null>(null);
@@ -216,6 +214,7 @@ export default function Mockwear() {
     acceptedImages.forEach((file) => engine.addImageFile(file, at));
     setPrintOn(true);
     setDesignsOpen(false);
+    setAsidePanel(null);
     if (closeSheet) setSheet(null);
     if (reservation.reachedLimit || reservation.count < images.length) {
       showToast("Upload limit reached. Contact us on WhatsApp to add more custom designs.");
@@ -372,6 +371,7 @@ export default function Mockwear() {
   const openSheet = (n: SheetName) => {
     if (sheet === n) { setSheet(null); return; }
     setDesignsOpen(false);
+    setAsidePanel(null);
     if (n === "saved") {
       setSavedError("");
       setSavedLoading(true);
@@ -380,22 +380,32 @@ export default function Mockwear() {
         .catch((reason: unknown) => setSavedError(reason instanceof Error ? reason.message : "Saved designs could not be loaded"))
         .finally(() => setSavedLoading(false));
     }
-    if ((n === "add" || n === "edit" || n === "text") && !printOn) setPrintOn(true);
+    if (n === "edit" && !printOn) setPrintOn(true);
     setSheet(n);
   };
   const onTool = (n: ToolName) => {
     if (n === "designs") {
       setSheet(null);
+      setAsidePanel(null);
       setDesignsOpen((current) => !current);
+    } else if (n === "color" || n === "add" || n === "text") {
+      setSheet(null);
+      setDesignsOpen(false);
+      setAsidePanel((current) => current === n ? null : n);
+      if (n === "text" && !printOn) setPrintOn(true);
     } else if (n === "upload") {
       setSheet(null);
       setDesignsOpen(false);
+      setAsidePanel(null);
       fileRef.current?.click();
-    } else if (n === "color" || n === "add" || n === "text" || n === "saved" || n === "help") openSheet(n);
+    } else if (n === "saved" || n === "help") openSheet(n);
     else if (n === "spin") setSpin((v) => !v);
   };
   const isOn = (n: ToolName) =>
-    n === "spin" ? spin : n === "designs" ? designsOpen : sheet === n;
+    n === "spin" ? spin
+      : n === "designs" ? designsOpen
+        : n === "color" || n === "add" || n === "text" ? asidePanel === n
+          : sheet === n;
 
   const addFiles = (files: FileList | File[]) => {
     addCustomFiles(files);
@@ -471,6 +481,7 @@ export default function Mockwear() {
       setSide(project.side);
       setPrintOn(true);
       setDesignsOpen(false);
+      setAsidePanel(null);
       setSheet(null);
       showToast(`Loaded "${design.name}"`);
     } catch (reason) {
@@ -490,6 +501,7 @@ export default function Mockwear() {
   };
   const openOrderSheet = () => {
     setDesignsOpen(false);
+    setAsidePanel(null);
     setPrintOn(true);
     setSheet("order");
   };
@@ -615,6 +627,7 @@ export default function Mockwear() {
       eng.current?.addImageFile(new File([blob], `${design.id}.${ext}`, { type: blob.type || "image/png" }));
       setPrintOn(true);
       setDesignsOpen(false);
+      setAsidePanel(null);
       setSheet(null);
       showToast(`${design.title} added to ${ZONES[side].label}`);
     } catch (reason) {
@@ -628,6 +641,97 @@ export default function Mockwear() {
   });
   const availableCategories = DESIGN_CATEGORIES.filter((category) =>
     catalog.some((design) => design.category === category),
+  );
+  const colorPanelContent = (
+    <div className="space-y-2.5">
+      <div className="flex flex-wrap gap-2">
+        {SWATCHES.map((swatch) => (
+          <button
+            key={swatch}
+            type="button"
+            aria-label={swatch}
+            aria-pressed={color === swatch}
+            onClick={() => pickColor(swatch)}
+            style={{ background: swatch }}
+            className={`size-[34px] rounded-full border-2 border-white/30 ${color === swatch ? "outline-2 outline-offset-2 outline-[#923dff]" : ""}`}
+          />
+        ))}
+      </div>
+      <div className="flex items-center gap-2">
+        <input type="color" value={color} onChange={(event) => pickColor(event.target.value)} className={colorInput} />
+        <span className="text-xs text-[#9a9a90]">Custom shirt color</span>
+      </div>
+    </div>
+  );
+  const addPanelContent = (
+    <div>
+      <p className="mb-2 text-xs text-[#9a9a90]">
+        {uploadAccess === "checking"
+          ? "Checking upload access..."
+          : uploadAccess === "admin"
+            ? "Admin account · unlimited custom uploads"
+            : `Custom uploads used: ${customUploadCount}/${CUSTOM_UPLOAD_LIMIT}`}
+      </p>
+      {uploadQuotaError && <p role="alert" className="mb-2 text-xs text-red-300">{uploadQuotaError}</p>}
+      {uploadAccess === "customer" && customUploadCount >= CUSTOM_UPLOAD_LIMIT && (
+        <p className="mb-3 rounded-lg bg-white/10 px-3 py-2 text-xs leading-relaxed text-[#f1f0ea]">
+          You’ve used all {CUSTOM_UPLOAD_LIMIT} custom uploads.{" "}
+          <a
+            href={`https://wa.me/${OWNER_WHATSAPP}?text=${encodeURIComponent("Hi, I would like to add more custom designs to my T-shirt mockup.")}`}
+            target="_blank"
+            rel="noreferrer"
+            className="font-semibold underline underline-offset-2"
+          >
+            Contact us on WhatsApp
+          </a>{" "}
+          to add more.
+        </p>
+      )}
+      <div
+        role="button"
+        tabIndex={0}
+        onClick={() => fileRef.current?.click()}
+        onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); fileRef.current?.click(); } }}
+        onDragOver={(event) => { event.preventDefault(); setDragOver(true); }}
+        onDragLeave={() => setDragOver(false)}
+        onDrop={(event) => { event.preventDefault(); setDragOver(false); addFiles(event.dataTransfer.files); }}
+        className={`flex cursor-pointer flex-col items-center gap-1.5 rounded-[14px] border-2 border-dashed px-3 py-[22px] text-center transition ${
+          dragOver ? "border-white bg-white/5" : "border-[#4a4a44] hover:border-[#9b58ff] hover:bg-[#7a35ff]/5"
+        }`}
+      >
+        <div className="grid size-[38px] place-items-center rounded-full bg-gradient-to-r from-[#5e19ff] to-[#a51eff] text-[22px] leading-none text-white">+</div>
+        <b className="text-sm">Upload artwork</b>
+        <small className="text-xs text-[#9a9a90]">Click, drag &amp; drop or paste (Ctrl+V) · PNG, JPG, WebP, SVG · transparent PNG is best</small>
+      </div>
+    </div>
+  );
+  const textPanelContent = (
+    <div className="space-y-3">
+      <input
+        className={`${input} w-full`}
+        value={txt}
+        onChange={(event) => setTxt(event.target.value)}
+        placeholder="Your text"
+        aria-label="Text to add"
+      />
+      <div className="flex gap-2">
+        <select className={`${input} min-w-0 flex-1`} value={txtFont} onChange={(event) => setTxtFont(event.target.value)}>
+          {FONTS.map((font) => <option key={font}>{font}</option>)}
+        </select>
+        <input type="color" value={txtCol} onChange={(event) => setTxtCol(event.target.value)} className={colorInput} aria-label="Text color" />
+      </div>
+      <button
+        type="button"
+        className={`${btnPri} w-full`}
+        onClick={() => {
+          eng.current?.addText(txt, txtFont, txtCol);
+          setPrintOn(true);
+          setAsidePanel(null);
+        }}
+      >
+        Add text to shirt
+      </button>
+    </div>
   );
 
   /* ---------- render ---------- */
@@ -660,7 +764,7 @@ export default function Mockwear() {
         <div className="flex shrink-0 items-center gap-1.5 sm:gap-2">
           <IconBtn title="Undo" onClick={() => eng.current?.undo()} disabled={!canUndo}><Icon name="undo" /></IconBtn>
           <IconBtn title="Redo" onClick={() => eng.current?.redo()} disabled={!canRedo}><Icon name="redo" /></IconBtn>
-          <IconBtn title="Design library" onClick={() => { setSheet(null); setDesignsOpen((current) => !current); }} on={designsOpen}>
+          <IconBtn title="Design library" onClick={() => { setSheet(null); setAsidePanel(null); setDesignsOpen((current) => !current); }} on={designsOpen}>
             <Icon name="grid" />
           </IconBtn>
           <div className="hidden sm:block">
@@ -739,10 +843,10 @@ export default function Mockwear() {
             setPlaceDragOver(false);
             if (e.dataTransfer.files.length) addFilesAt(e.dataTransfer.files, e.clientX, e.clientY);
           }}
-          className={`absolute right-2 top-auto bottom-[150px] z-20 flex h-[min(48vh,420px)] w-[calc(100%-1rem)] flex-col overflow-hidden rounded-[24px] sm:right-4 sm:w-[min(360px,calc(100%-2rem))] md:top-4 md:bottom-4 md:h-auto md:w-[340px] ${
+          className={`absolute z-20 flex flex-col overflow-hidden rounded-[24px] ${
             printOn
-              ? "border border-[#2d3045] bg-[#10121f]/95 shadow-[0_24px_70px_#000b] backdrop-blur-xl"
-              : "pointer-events-none border-transparent bg-transparent shadow-none backdrop-blur-none"
+              ? "right-2 top-auto bottom-[150px] h-[min(48vh,420px)] w-[calc(100%-1rem)] border border-[#2d3045] bg-[#10121f]/95 shadow-[0_24px_70px_#000b] backdrop-blur-xl sm:right-4 sm:w-[min(360px,calc(100%-2rem))] md:top-4 md:bottom-4 md:h-auto md:w-[340px]"
+              : "pointer-events-none right-3 top-3 h-12 w-[62px] border-transparent bg-transparent shadow-none backdrop-blur-none md:right-4 md:top-4"
           } ${gridOn && printOn ? "guides" : ""}`}
         >
           <div className={`pointer-events-auto flex h-12 shrink-0 items-center gap-2 px-3 ${printOn ? "border-b border-[#26283b]" : "justify-end"}`}>
@@ -1017,7 +1121,7 @@ export default function Mockwear() {
           )}
         </div>
 
-        <nav className="absolute bottom-2 left-2 right-2 z-40 grid grid-cols-8 gap-0.5 rounded-2xl border border-[#26283b] bg-[#10121f]/95 p-1.5 shadow-[0_12px_30px_#0008] backdrop-blur-xl md:bottom-4 md:left-3 md:right-auto md:top-4 md:flex md:w-[72px] md:flex-col md:justify-start md:gap-1 md:overflow-y-auto">
+        <nav className="absolute bottom-2 left-2 right-2 z-40 grid grid-cols-7 gap-0.5 rounded-2xl border border-[#26283b] bg-[#10121f]/95 p-1.5 shadow-[0_12px_30px_#0008] backdrop-blur-xl md:bottom-4 md:left-3 md:right-auto md:top-4 md:flex md:w-[72px] md:flex-col md:justify-start md:gap-1 md:overflow-y-auto">
           {TOOLS.map((tool) => (
             <button
               key={tool.name}
@@ -1036,17 +1140,26 @@ export default function Mockwear() {
           ))}
         </nav>
 
-        {designsOpen && (
+        {(designsOpen || asidePanel !== null) && (
           <aside className="absolute inset-x-2 top-2 bottom-[148px] z-40 flex flex-col overflow-hidden rounded-[24px] border border-[#2d3045] bg-[#10121f]/95 shadow-[0_24px_70px_#000b] backdrop-blur-xl md:inset-x-auto md:left-[92px] md:top-4 md:bottom-4 md:w-[320px]">
             <div className="flex h-14 shrink-0 items-center justify-between border-b border-[#26283b] px-4">
               <div>
-                <h2 className="text-base font-bold">Design Library</h2>
-                <p className="text-[10px] text-[#9092a8]">{catalog.length} designs available</p>
+                <h2 className="text-base font-bold">
+                  {designsOpen ? "Design Library" : asidePanel === "color" ? "Shirt color" : asidePanel === "add" ? "Add design" : "Add text"}
+                </h2>
+                <p className="text-[10px] text-[#9092a8]">
+                  {designsOpen ? `${catalog.length} designs available` : asidePanel === "color" ? "Choose a color for your shirt" : asidePanel === "add" ? "Upload custom artwork" : "Personalize your shirt"}
+                </p>
               </div>
-              <IconBtn title="Close design library" onClick={() => setDesignsOpen(false)}>
+              <IconBtn
+                title="Close panel"
+                onClick={() => { setDesignsOpen(false); setAsidePanel(null); }}
+              >
                 <Icon name="close" className="size-4" />
               </IconBtn>
             </div>
+            {designsOpen && (
+              <>
             <label className="relative mx-3 mt-3 block shrink-0">
               <Icon name="search" className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-[#9294aa]" />
               <input
@@ -1101,7 +1214,7 @@ export default function Mockwear() {
               )}
             </div>
             <div className="shrink-0 border-t border-[#26283b] p-3">
-              <button type="button" onClick={() => openSheet("add")} className={`${btnPri} flex w-full items-center justify-center gap-2`}>
+              <button type="button" onClick={() => { setDesignsOpen(false); setAsidePanel("add"); }} className={`${btnPri} flex w-full items-center justify-center gap-2`}>
                 <Icon name="upload" className="size-4" />
                 Upload your own design
               </button>
@@ -1109,6 +1222,15 @@ export default function Mockwear() {
                 Admin design upload
               </Link>
             </div>
+              </>
+            )}
+            {asidePanel && (
+              <div className="min-h-0 flex-1 overflow-y-auto p-4">
+                {asidePanel === "color" && colorPanelContent}
+                {asidePanel === "add" && addPanelContent}
+                {asidePanel === "text" && textPanelContent}
+              </div>
+            )}
           </aside>
         )}
 
@@ -1167,97 +1289,6 @@ export default function Mockwear() {
                     </button>
                   </div>
                 ))}
-              </div>
-            )}
-
-            {sheet === "color" && (
-              <div className="space-y-2.5">
-                <div className="flex flex-wrap gap-2">
-                  {SWATCHES.map((c) => (
-                    <button
-                      key={c}
-                      aria-label={c}
-                      onClick={() => pickColor(c)}
-                      style={{ background: c }}
-                      className={`size-[34px] rounded-full border-2 border-white/30 ${color === c ? "outline-2 outline-offset-2 outline-[#923dff]" : ""}`}
-                    />
-                  ))}
-                </div>
-                <div className="flex items-center gap-2">
-                  <input type="color" value={color} onChange={(e) => pickColor(e.target.value)} className={colorInput} />
-                  <span className="text-xs text-[#9a9a90]">Custom shirt color</span>
-                </div>
-              </div>
-            )}
-
-            {sheet === "add" && (
-              <div>
-                <p className="mb-2 text-xs text-[#9a9a90]">
-                  {uploadAccess === "checking"
-                    ? "Checking upload access..."
-                    : uploadAccess === "admin"
-                      ? "Admin account · unlimited custom uploads"
-                      : `Custom uploads used: ${customUploadCount}/${CUSTOM_UPLOAD_LIMIT}`}
-                </p>
-                {uploadQuotaError && <p role="alert" className="mb-2 text-xs text-red-300">{uploadQuotaError}</p>}
-                {uploadAccess === "customer" && customUploadCount >= CUSTOM_UPLOAD_LIMIT && (
-                  <p className="mb-3 rounded-lg bg-white/10 px-3 py-2 text-xs leading-relaxed text-[#f1f0ea]">
-                    You’ve used all {CUSTOM_UPLOAD_LIMIT} custom uploads.{" "}
-                    <a
-                      href={`https://wa.me/${OWNER_WHATSAPP}?text=${encodeURIComponent("Hi, I would like to add more custom designs to my T-shirt mockup.")}`}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="font-semibold underline underline-offset-2"
-                    >
-                      Contact us on WhatsApp
-                    </a>{" "}
-                    to add more.
-                  </p>
-                )}
-                <div
-                  tabIndex={0}
-                  onClick={() => fileRef.current?.click()}
-                  onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); fileRef.current?.click(); } }}
-                  onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
-                  onDragLeave={() => setDragOver(false)}
-                  onDrop={(e) => { e.preventDefault(); setDragOver(false); addFiles(e.dataTransfer.files); }}
-                  className={`flex cursor-pointer flex-col items-center gap-1.5 rounded-[14px] border-2 border-dashed px-3 py-[22px] text-center transition ${
-                    dragOver ? "border-white bg-white/5"                     : "border-[#4a4a44] hover:border-[#9b58ff] hover:bg-[#7a35ff]/5"
-                  }`}
-                >
-                  <div className="grid size-[38px] place-items-center rounded-full bg-gradient-to-r from-[#5e19ff] to-[#a51eff] text-[22px] leading-none text-white">+</div>
-                  <b className="text-sm">Upload artwork</b>
-                  <small className="text-xs text-[#9a9a90]">Click, drag &amp; drop or paste (Ctrl+V) · PNG, JPG, WebP, SVG · transparent PNG is best</small>
-                </div>
-              </div>
-            )}
-
-            {sheet === "text" && (
-              <div className="space-y-3">
-                <input
-                  className={`${input} w-full`}
-                  value={txt}
-                  onChange={(event) => setTxt(event.target.value)}
-                  placeholder="Your text"
-                  aria-label="Text to add"
-                />
-                <div className="flex gap-2">
-                  <select className={`${input} min-w-0 flex-1`} value={txtFont} onChange={(event) => setTxtFont(event.target.value)}>
-                    {FONTS.map((font) => <option key={font}>{font}</option>)}
-                  </select>
-                  <input type="color" value={txtCol} onChange={(event) => setTxtCol(event.target.value)} className={colorInput} aria-label="Text color" />
-                </div>
-                <button
-                  type="button"
-                  className={`${btnPri} w-full`}
-                  onClick={() => {
-                    eng.current?.addText(txt, txtFont, txtCol);
-                    setPrintOn(true);
-                    setSheet(null);
-                  }}
-                >
-                  Add text to shirt
-                </button>
               </div>
             )}
 
