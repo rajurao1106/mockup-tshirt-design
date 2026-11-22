@@ -842,14 +842,14 @@ export default function Mockwear() {
               title="Open design placement"
               aria-label="Open design placement"
               onClick={() => setPrintOn(true)}
-              className="absolute right-3 top-[72px] z-30 flex h-11 items-center gap-2 rounded-full border border-[#5d42a8] bg-[#171927]/95 px-3.5 text-xs font-semibold text-white shadow-[0_10px_30px_#0009] backdrop-blur-xl md:hidden"
+              className="absolute right-3 top-3 z-30 flex h-11 items-center gap-2 rounded-full border border-[#5d42a8] bg-[#171927]/95 px-3.5 text-xs font-semibold text-white shadow-[0_10px_30px_#0009] backdrop-blur-xl md:hidden"
             >
               <Icon name="shirt" className="size-4" />
               <span>Design</span>
             </button>
           )}
-          <div className="pointer-events-none absolute bottom-4 left-3 text-[11px] text-[#9699af] md:left-[94px]">Drag to rotate · Scroll to zoom</div>
-          <div className="absolute bottom-3 left-1/2 z-10 flex -translate-x-1/2 items-center gap-2 rounded-full border border-[#32344a] bg-[#111321]/90 px-2 py-1.5 shadow-[0_8px_24px_#0008] md:bottom-5">
+          <div className="pointer-events-none absolute bottom-[76px] left-3 text-[11px] text-[#9699af] md:bottom-4 md:left-[94px]">Drag to rotate · Scroll to zoom</div>
+          <div className="absolute bottom-[72px] left-1/2 z-10 flex -translate-x-1/2 items-center gap-2 rounded-full border border-[#32344a] bg-[#111321]/90 px-2 py-1.5 shadow-[0_8px_24px_#0008] md:bottom-5">
             <IconBtn title="Zoom out" onClick={() => eng.current?.zoomOut()}><Icon name="zoomOut" className="size-4" /></IconBtn>
             <span className="min-w-[48px] text-center text-xs font-semibold text-[#d8d9eb]">{zoomPercent}%</span>
             <IconBtn
@@ -891,7 +891,7 @@ export default function Mockwear() {
           style={printOn ? { height: `${editorHeight}%` } : undefined}
           className={`absolute z-20 flex flex-col overflow-hidden rounded-t-[24px] ${
             printOn
-              ? "inset-x-0 bottom-0 w-full border-t border-[#2d3045] bg-[#10121f]/98 shadow-[0_-20px_60px_#000b] backdrop-blur-xl md:!h-auto md:right-4 md:left-auto md:top-4 md:bottom-4 md:w-[340px] md:rounded-[24px] md:border"
+              ? "inset-x-0 bottom-[68px] w-full border-t border-[#2d3045] bg-[#10121f]/98 shadow-[0_-20px_60px_#000b] backdrop-blur-xl md:!h-auto md:right-4 md:left-auto md:top-4 md:bottom-4 md:w-[340px] md:rounded-[24px] md:border"
               : "pointer-events-none right-3 top-3 h-12 w-[62px] border-transparent bg-transparent shadow-none backdrop-blur-none md:right-4 md:top-4"
           }`}
         >
@@ -1176,7 +1176,7 @@ export default function Mockwear() {
           )}
         </div>
 
-        <nav className="absolute left-1/2 top-2 z-40 grid w-[calc(100%-1rem)] grid-cols-7 gap-0.5 rounded-2xl border border-[#26283b] bg-[#10121f]/95 p-1.5 shadow-[0_12px_30px_#0008] backdrop-blur-xl -translate-x-1/2 md:left-3 md:top-3 md:w-[72px] md:-translate-x-0 md:flex md:flex-col md:justify-start md:gap-1 md:overflow-y-auto">
+        <nav className="absolute bottom-2 left-1/2 z-40 grid w-[calc(100%-1rem)] grid-cols-7 gap-0.5 rounded-2xl border border-[#26283b] bg-[#10121f]/95 p-1.5 shadow-[0_12px_30px_#0008] backdrop-blur-xl -translate-x-1/2 md:bottom-auto md:left-3 md:top-3 md:w-[72px] md:-translate-x-0 md:flex md:flex-col md:justify-start md:gap-1 md:overflow-y-auto">
           {TOOLS.map((tool) => (
             <button
               key={tool.name}
