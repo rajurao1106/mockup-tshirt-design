@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import Link from "next/link";
+import { MessageCircle } from "lucide-react";
 import { CW, createEngine, SIDES, ZONES, type Engine, type EngineEvents, type OriginalArtwork, type SelInfo, type Side } from "@/lib/engine";
 import { DESIGN_CATEGORIES, type CatalogDesign } from "@/lib/designCatalog";
 import { deleteSavedDesign, listSavedDesigns, loadDesign, saveDesign, type SavedDesignSummary } from "@/lib/savedDesigns";
@@ -806,19 +807,17 @@ export default function Mockwear() {
             type="button"
             title="Save Design"
             onClick={() => openSheet("saved")}
-            className="flex h-[38px] items-center justify-center gap-1.5 rounded-full bg-gradient-to-r from-[#5e19ff] to-[#a51eff] px-2.5 text-xs font-semibold text-white transition hover:brightness-110 sm:px-4"
+            className="grid size-[38px] place-items-center rounded-full bg-gradient-to-r from-[#5e19ff] to-[#a51eff] text-white transition hover:brightness-110"
           >
             <Icon name="save" className="size-4" />
-            <span className="hidden sm:inline">Save Design</span>
           </button>
           <button
             type="button"
             title="Confirm order"
             onClick={openOrderSheet}
-            className="h-[38px] rounded-full bg-[#25d366] px-3 text-[11px] font-bold text-[#102015] transition hover:bg-[#36df78] sm:px-4 sm:text-xs"
+            className="grid size-[38px] place-items-center rounded-full bg-[#25d366] text-[#102015] transition hover:bg-[#36df78]"
           >
-            <span className="sm:hidden">Order</span>
-            <span className="hidden sm:inline">Order on WhatsApp</span>
+            <MessageCircle aria-hidden="true" className="size-5" />
           </button>
         </div>
       </header>
@@ -849,7 +848,7 @@ export default function Mockwear() {
             </button>
           )}
           <div className="pointer-events-none absolute bottom-[76px] left-3 text-[11px] text-[#9699af] md:bottom-4 md:left-[94px]">Drag to rotate · Scroll to zoom</div>
-          <div className="absolute bottom-[72px] left-1/2 z-10 flex -translate-x-1/2 items-center gap-2 rounded-full border border-[#32344a] bg-[#111321]/90 px-2 py-1.5 shadow-[0_8px_24px_#0008] md:bottom-5">
+          <div className="absolute bottom-[72px] left-1/2 z-10 hidden -translate-x-1/2 items-center gap-2 rounded-full border border-[#32344a] bg-[#111321]/90 px-2 py-1.5 shadow-[0_8px_24px_#0008] md:flex md:bottom-5">
             <IconBtn title="Zoom out" onClick={() => eng.current?.zoomOut()}><Icon name="zoomOut" className="size-4" /></IconBtn>
             <span className="min-w-[48px] text-center text-xs font-semibold text-[#d8d9eb]">{zoomPercent}%</span>
             <IconBtn
