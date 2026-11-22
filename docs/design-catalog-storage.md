@@ -1,6 +1,6 @@
 # Design catalog storage
 
-The design catalog is stored in `data/designs.json` during local development when no Blob credentials are configured. On Vercel, catalog reads and writes use the public Vercel Blob object `catalog/designs.json`.
+The design catalog is stored in `data/designs.json` during local development when no Blob credentials are configured. On Vercel, catalog reads and writes use the public Vercel Blob object `catalog/designs.json` when Blob credentials are configured. Without them, reads use the bundled `data/designs.json`; catalog changes cannot be saved on Vercel without Blob storage.
 
 To enable persistent catalog updates on Vercel:
 

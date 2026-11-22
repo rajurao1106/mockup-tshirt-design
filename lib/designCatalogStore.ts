@@ -28,9 +28,8 @@ async function readLocalCatalog() {
 }
 
 export async function readDesignCatalog(): Promise<CatalogDesign[]> {
-  if (!usesBlobStorage()) return readLocalCatalog();
+  if (!process.env.BLOB_READ_WRITE_TOKEN) return readLocalCatalog();
 
-  ensureBlobCredentials();
   const blob = await get(CATALOG_BLOB_PATH, { access: "public" });
   if (!blob || blob.statusCode !== 200 || !blob.stream) return readLocalCatalog();
 
