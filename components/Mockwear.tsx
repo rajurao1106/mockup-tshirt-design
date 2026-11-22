@@ -7,10 +7,11 @@ import { CW, createEngine, SIDES, ZONES, type Engine, type EngineEvents, type Or
 import { DESIGN_CATEGORIES, type CatalogDesign } from "@/lib/designCatalog";
 import { deleteSavedDesign, listSavedDesigns, loadDesign, saveDesign, type SavedDesignSummary } from "@/lib/savedDesigns";
 import { Icon, type IconName } from "./icons";
+import { SHIRT_TYPES, ShirtTypeIcon, type ShirtTypeId } from "./shirtTypes";
 
 type SheetName = "edit" | "help" | "order" | "saved";
-type ToolName = "color" | "add" | "designs" | "text" | "upload" | "saved" | "spin" | "help";
-type AsidePanelName = "color" | "add" | "text";
+type ToolName = "color" | "add" | "types" | "designs" | "text" | "upload" | "saved" | "spin" | "help";
+type AsidePanelName = "color" | "add" | "text" | "types";
 type ContextMenuName = "arrange" | "layers" | "more";
 
 const SWATCHES = ["#efede8", "#1a1a1a", "#3d3d3a", "#e11d48", "#2563eb", "#16a34a", "#f59e0b", "#7c3aed", "#9ca3af", "#0f766e"];
@@ -20,6 +21,7 @@ const CUSTOM_UPLOAD_COUNT_KEY = "mockwear-custom-upload-count-v1";
 const OWNER_WHATSAPP = (process.env.NEXT_PUBLIC_OWNER_WHATSAPP ?? "917470578448").replace(/\D/g, "");
 const TOOLS: { name: ToolName; label: string; icon: IconName }[] = [
   { name: "color", label: "Color", icon: "color" },
+  { name: "types", label: "Types", icon: "shirt" },
   { name: "designs", label: "Designs", icon: "designs" },
   { name: "add", label: "Add", icon: "add" },
   { name: "text", label: "Text", icon: "text" },
@@ -117,6 +119,7 @@ export default function Mockwear() {
   const [zoomPercent, setZoomPercent] = useState(100);
   const [designsOpen, setDesignsOpen] = useState(false);
   const [asidePanel, setAsidePanel] = useState<AsidePanelName | null>(null);
+  const [shirtType, setShirtType] = useState<ShirtTypeId | null>(null);
   const [canUndo, setCanUndo] = useState(false);
   const [canRedo, setCanRedo] = useState(false);
   const [sel, setSel] = useState<SelInfo | null>(null);
@@ -272,6 +275,7 @@ export default function Mockwear() {
   /* keep engine in sync with React state */
   useEffect(() => { eng.current?.setSide(side); }, [side]);
   useEffect(() => { eng.current?.setColor(color); }, [color]);
+  useEffect(() => { eng.current?.setShirtType(shirtType ?? "crew-neck"); }, [shirtType, ready]);
   useEffect(() => { eng.current?.setSpin(spin); }, [spin]);
   useEffect(() => {
     let active = true;
@@ -421,7 +425,7 @@ export default function Mockwear() {
       setSheet(null);
       setAsidePanel(null);
       setDesignsOpen((current) => !current);
-    } else if (n === "color" || n === "add" || n === "text") {
+    } else if (n === "color" || n === "add" || n === "text" || n === "types") {
       setSheet(null);
       setDesignsOpen(false);
       setAsidePanel((current) => current === n ? null : n);
@@ -437,7 +441,7 @@ export default function Mockwear() {
   const isOn = (n: ToolName) =>
     n === "spin" ? spin
       : n === "designs" ? designsOpen
-        : n === "color" || n === "add" || n === "text" ? asidePanel === n
+        : n === "color" || n === "add" || n === "text" || n === "types" ? asidePanel === n
           : sheet === n;
 
   const addFiles = (files: FileList | File[]) => {
@@ -625,6 +629,7 @@ export default function Mockwear() {
         `Phone: ${phone}`,
         `Size: ${orderSize}`,
         `Quantity: ${quantity}`,
+        `Shirt type: ${SHIRT_TYPES.find((type) => type.id === shirtType)?.label ?? "Not selected"}`,
         `Shirt color: ${color}`,
         `View: ${ZONES[side].label}`,
         addressLine,
@@ -738,6 +743,32 @@ export default function Mockwear() {
       </div>
     </div>
   );
+  const typesPanelContent = (
+    <div className="grid grid-cols-2 gap-2.5">
+      {SHIRT_TYPES.map((type) => (
+        <button
+          key={type.id}
+          type="button"
+          aria-pressed={shirtType === type.id}
+          onClick={() => {
+            setShirtType(type.id);
+            setSheet(null);
+            setAsidePanel(null);
+            setDesignsOpen(true);
+            showToast(`${type.label} selected. Ab design chunein`);
+          }}
+          className={`flex flex-col items-center gap-1.5 rounded-2xl border p-2.5 transition ${
+            shirtType === type.id
+              ? "border-[#8a45ff] bg-[#661cff]/20 text-white shadow-[0_0_18px_#702aff33]"
+              : "border-[#292c40] bg-[#171927] text-[#d8d9eb] hover:border-[#8a45ff]"
+          }`}
+        >
+          <span className="size-16"><ShirtTypeIcon id={type.id} /></span>
+          <span className="text-center text-[11px] font-semibold leading-tight">{type.label}</span>
+        </button>
+      ))}
+    </div>
+  );
   const textPanelContent = (
     <div className="space-y-3">
       <input
@@ -797,9 +828,6 @@ export default function Mockwear() {
         <div className="flex shrink-0 items-center gap-1.5 sm:gap-2">
           <IconBtn title="Undo" onClick={() => eng.current?.undo()} disabled={!canUndo}><Icon name="undo" /></IconBtn>
           <IconBtn title="Redo" onClick={() => eng.current?.redo()} disabled={!canRedo}><Icon name="redo" /></IconBtn>
-          <IconBtn title="Design library" onClick={() => { setSheet(null); setAsidePanel(null); setDesignsOpen((current) => !current); }} on={designsOpen}>
-            <Icon name="grid" />
-          </IconBtn>
           <div className="hidden sm:block">
             <IconBtn title="Download PNG" onClick={exportPng}><Icon name="download" /></IconBtn>
           </div>
@@ -1175,7 +1203,7 @@ export default function Mockwear() {
           )}
         </div>
 
-        <nav className="absolute bottom-2 left-1/2 z-40 grid w-[calc(100%-1rem)] grid-cols-7 gap-0.5 rounded-2xl border border-[#26283b] bg-[#10121f]/95 p-1.5 shadow-[0_12px_30px_#0008] backdrop-blur-xl -translate-x-1/2 md:bottom-auto md:left-3 md:top-3 md:w-[72px] md:-translate-x-0 md:flex md:flex-col md:justify-start md:gap-1 md:overflow-y-auto">
+        <nav className="absolute bottom-2 left-1/2 z-40 grid w-[calc(100%-1rem)] grid-cols-8 gap-0.5 rounded-2xl border border-[#26283b] bg-[#10121f]/95 p-1.5 shadow-[0_12px_30px_#0008] backdrop-blur-xl -translate-x-1/2 md:bottom-auto md:left-3 md:top-3 md:w-[72px] md:-translate-x-0 md:flex md:flex-col md:justify-start md:gap-1 md:overflow-y-auto">
           {TOOLS.map((tool) => (
             <button
               key={tool.name}
@@ -1199,10 +1227,10 @@ export default function Mockwear() {
             <div className="flex h-14 shrink-0 items-center justify-between border-b border-[#26283b] px-4">
               <div>
                 <h2 className="text-base font-bold">
-                  {designsOpen ? "Design Library" : asidePanel === "color" ? "Shirt color" : asidePanel === "add" ? "Add design" : "Add text"}
+                  {designsOpen ? "Design Library" : asidePanel === "types" ? "Shirt type" : asidePanel === "color" ? "Shirt color" : asidePanel === "add" ? "Add design" : "Add text"}
                 </h2>
                 <p className="text-[10px] text-[#9092a8]">
-                  {designsOpen ? `${catalog.length} designs available` : asidePanel === "color" ? "Choose a color for your shirt" : asidePanel === "add" ? "Upload custom artwork" : "Personalize your shirt"}
+                  {designsOpen ? `${catalog.length} designs available` : asidePanel === "types" ? "Pehle shirt type chunein, phir design" : asidePanel === "color" ? "Choose a color for your shirt" : asidePanel === "add" ? "Upload custom artwork" : "Personalize your shirt"}
                 </p>
               </div>
               <IconBtn
@@ -1214,6 +1242,21 @@ export default function Mockwear() {
             </div>
             {designsOpen && (
               <>
+            {shirtType && (
+              <div className="mx-3 mt-3 flex shrink-0 items-center gap-2 rounded-xl border border-[#34364a] bg-[#171927] px-2.5 py-1.5">
+                <span className="size-7 shrink-0 text-[#c9a8ff]"><ShirtTypeIcon id={shirtType} /></span>
+                <span className="min-w-0 flex-1 truncate text-xs font-semibold">
+                  {SHIRT_TYPES.find((type) => type.id === shirtType)?.label}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => { setDesignsOpen(false); setAsidePanel("types"); }}
+                  className="text-[10px] font-semibold text-[#aeb0c4] underline underline-offset-2 hover:text-white"
+                >
+                  Change
+                </button>
+              </div>
+            )}
             <label className="relative mx-3 mt-3 block shrink-0">
               <Icon name="search" className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-[#9294aa]" />
               <input
@@ -1283,6 +1326,7 @@ export default function Mockwear() {
                 {asidePanel === "color" && colorPanelContent}
                 {asidePanel === "add" && addPanelContent}
                 {asidePanel === "text" && textPanelContent}
+                {asidePanel === "types" && typesPanelContent}
               </div>
             )}
           </aside>
