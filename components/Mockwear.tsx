@@ -1,8 +1,9 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ChangeEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import Link from "next/link";
-import { MessageCircle } from "lucide-react";
+import Image from "next/image";
+import { Download, LoaderCircle, MessageCircle, RotateCcw, Sparkles, Upload, X } from "lucide-react";
 import { CW, createEngine, SIDES, ZONES, type Engine, type EngineEvents, type OriginalArtwork, type SelInfo, type Side } from "@/lib/engine";
 import { DESIGN_CATEGORIES, type CatalogDesign } from "@/lib/designCatalog";
 import { deleteSavedDesign, listSavedDesigns, loadDesign, saveDesign, type SavedDesignSummary } from "@/lib/savedDesigns";
@@ -97,12 +98,32 @@ const SecTitle = ({ children }: { children: ReactNode }) => (
 const Sep = () => <div className="my-3.5 h-px bg-[#33332f]" />;
 
 /* ================= main component ================= */
+// Workers AI FLUX.2 accepts input images smaller than 512x512, so shrink before upload.
+async function resizeForTryOn(blob: Blob, maxSide = 500): Promise<Blob> {
+  const bitmap = await createImageBitmap(blob);
+  const scale = Math.min(1, maxSide / Math.max(bitmap.width, bitmap.height));
+  const w = Math.max(1, Math.round(bitmap.width * scale));
+  const h = Math.max(1, Math.round(bitmap.height * scale));
+  const canvas = document.createElement("canvas");
+  canvas.width = w;
+  canvas.height = h;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) throw new Error("Could not prepare the image.");
+  ctx.drawImage(bitmap, 0, 0, w, h);
+  bitmap.close();
+  return new Promise((resolve, reject) =>
+    canvas.toBlob((b) => (b ? resolve(b) : reject(new Error("Could not prepare the image."))), "image/png"),
+  );
+}
+
 export default function Mockwear() {
   const viewRef = useRef<HTMLDivElement>(null);
   const placeRef = useRef<HTMLDivElement>(null);
   const stageRef = useRef<HTMLDivElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const replaceFileRef = useRef<HTMLInputElement>(null);
+  const tryOnFileRef = useRef<HTMLInputElement>(null);
+  const tryOnAbortRef = useRef<AbortController | null>(null);
   const contextToolbarRef = useRef<HTMLDivElement>(null);
   const eng = useRef<Engine | null>(null);
   const toastTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
@@ -158,6 +179,23 @@ export default function Mockwear() {
   const [orderQty, setOrderQty] = useState("1");
   const [fulfillment, setFulfillment] = useState<"delivery" | "pickup">("delivery");
   const [orderBusy, setOrderBusy] = useState(false);
+  const [tryOnOpen, setTryOnOpen] = useState(false);
+  const [tryOnFile, setTryOnFile] = useState<File | null>(null);
+  const [tryOnPreview, setTryOnPreview] = useState<string | null>(null);
+  const [tryOnResult, setTryOnResult] = useState<string | null>(null);
+  const [tryOnConsent, setTryOnConsent] = useState(false);
+  const [tryOnBusy, setTryOnBusy] = useState(false);
+  const [tryOnError, setTryOnError] = useState("");
+
+  useEffect(() => {
+    if (!tryOnPreview) return;
+    return () => URL.revokeObjectURL(tryOnPreview);
+  }, [tryOnPreview]);
+
+  useEffect(() => {
+    if (!tryOnResult) return;
+    return () => URL.revokeObjectURL(tryOnResult);
+  }, [tryOnResult]);
 
   const showToast = useCallback((m: string) => {
     setToast(m);
@@ -470,6 +508,86 @@ export default function Mockwear() {
     a.download = `mockup-design-${side}.png`;
     a.click();
     showToast("PNG downloaded");
+  };
+  const closeTryOn = () => {
+    tryOnAbortRef.current?.abort();
+    tryOnAbortRef.current = null;
+    setTryOnBusy(false);
+    setTryOnOpen(false);
+    setTryOnFile(null);
+    setTryOnPreview(null);
+    setTryOnResult(null);
+    setTryOnConsent(false);
+    setTryOnError("");
+    if (tryOnFileRef.current) tryOnFileRef.current.value = "";
+  };
+  const chooseTryOnPhoto = (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+    if (!["image/jpeg", "image/png", "image/webp"].includes(file.type)) {
+      setTryOnError("Upload a JPG, PNG, or WebP photo.");
+      return;
+    }
+    if (file.size < 1 || file.size > 5 * 1024 * 1024) {
+      setTryOnError("Photo size must be 5 MB or less.");
+      return;
+    }
+    setTryOnError("");
+    setTryOnResult(null);
+    setTryOnFile(file);
+    setTryOnPreview(URL.createObjectURL(file));
+  };
+  const generateTryOn = async () => {
+    if (!tryOnFile || !tryOnConsent) {
+      setTryOnError("Upload a photo and give permission before generating your preview.");
+      return;
+    }
+    const frontImage = eng.current?.exportSideViews()?.front;
+    if (!frontImage) {
+      setTryOnError("The shirt preview is still loading. Please try again in a moment.");
+      return;
+    }
+
+    const controller = new AbortController();
+    tryOnAbortRef.current?.abort();
+    tryOnAbortRef.current = controller;
+    setTryOnBusy(true);
+    setTryOnError("");
+    setTryOnResult(null);
+
+    try {
+      const shirtBlob = await (await fetch(frontImage)).blob();
+      const form = new FormData();
+      const personBlob = await resizeForTryOn(tryOnFile);
+      form.append("personImage", new File([personBlob], "person.png", { type: "image/png" }));
+      const shirtSmall = await resizeForTryOn(shirtBlob);
+      form.append("shirtImage", new File([shirtSmall], "shirt-front.png", { type: "image/png" }));
+      form.append("consent", "true");
+      const response = await fetch("/api/tryon", {
+        method: "POST",
+        body: form,
+        signal: controller.signal,
+      });
+      if (!response.ok) {
+        const payload = await response.json().catch(() => null) as { error?: unknown } | null;
+        throw new Error(typeof payload?.error === "string" ? payload.error : "AI preview could not be generated. Please try again.");
+      }
+      const result = await response.blob();
+      if (!result.type.startsWith("image/")) {
+        throw new Error("AI preview returned an invalid image. Please try again.");
+      }
+      setTryOnResult(URL.createObjectURL(result));
+    } catch (reason) {
+      if (!controller.signal.aborted) {
+        setTryOnError(reason instanceof Error ? reason.message : "AI preview could not be generated. Please try again.");
+      }
+    } finally {
+      if (tryOnAbortRef.current === controller) {
+        tryOnAbortRef.current = null;
+        setTryOnBusy(false);
+      }
+    }
   };
   const saveCurrentDesign = async () => {
     const name = savedName.trim();
@@ -831,6 +949,9 @@ export default function Mockwear() {
           <div className="hidden sm:block">
             <IconBtn title="Download PNG" onClick={exportPng}><Icon name="download" /></IconBtn>
           </div>
+          <IconBtn title="Try on me" onClick={() => { setTryOnError(""); setTryOnOpen(true); }} disabled={!ready}>
+            <Sparkles aria-hidden="true" className="size-[17px]" />
+          </IconBtn>
           <button
             type="button"
             title="Save Design"
@@ -1528,6 +1649,115 @@ export default function Mockwear() {
         )}
 
       </main>
+
+      {tryOnOpen && (
+        <div
+          className="fixed inset-0 z-[100] grid place-items-center bg-black/75 p-3 backdrop-blur-sm sm:p-6"
+          onMouseDown={(event) => { if (event.target === event.currentTarget) closeTryOn(); }}
+        >
+          <section
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="try-on-title"
+            className="max-h-[min(92dvh,900px)] w-full max-w-2xl overflow-y-auto rounded-[24px] border border-[#2d3045] bg-[#111321] p-4 shadow-[0_24px_70px_#000d] sm:p-6"
+          >
+            <div className="mb-5 flex items-center justify-between border-b border-[#26283b] pb-3">
+              <div>
+                <h2 id="try-on-title" className="text-base font-bold">AI Try-On</h2>
+                <p className="mt-1 text-xs text-[#9a9a90]">Preview your shirt design on your photo.</p>
+              </div>
+              <IconBtn title="Close AI Try-On" onClick={closeTryOn}>
+                <X aria-hidden="true" className="size-4" />
+              </IconBtn>
+            </div>
+
+            {tryOnResult && tryOnPreview ? (
+              <>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <div className="min-w-0">
+                    <p className="mb-2 text-xs font-semibold text-[#c8c9d8]">Original photo</p>
+                    <div className="relative h-[32dvh] rounded-xl border border-[#2d3045] bg-[#0b0c14] sm:h-[42dvh]">
+                      <Image src={tryOnPreview} alt="Your original photo" fill unoptimized sizes="(max-width: 640px) 100vw, 50vw" className="rounded-xl object-contain" />
+                    </div>
+                  </div>
+                  <div className="min-w-0">
+                    <p className="mb-2 text-xs font-semibold text-[#c8c9d8]">AI try-on</p>
+                    <div className="relative h-[32dvh] rounded-xl border border-[#2d3045] bg-[#0b0c14] sm:h-[42dvh]">
+                      <Image src={tryOnResult} alt="AI try-on preview" fill unoptimized sizes="(max-width: 640px) 100vw, 50vw" className="rounded-xl object-contain" />
+                    </div>
+                  </div>
+                </div>
+                <p className="mt-3 text-center text-xs leading-relaxed text-[#aaa99f]">
+                  AI preview – actual product fit aur print thoda alag ho sakta hai.
+                </p>
+                <div className="mt-5 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+                  <button type="button" onClick={() => void generateTryOn()} disabled={tryOnBusy} className={`${btn} flex items-center justify-center gap-2`}>
+                    {tryOnBusy ? <LoaderCircle aria-hidden="true" className="size-4 animate-spin" /> : <RotateCcw aria-hidden="true" className="size-4" />}
+                    {tryOnBusy ? "Generating..." : "Try again"}
+                  </button>
+                  <a href={tryOnResult} download="mockwear-ai-try-on.png" className={`${btnPri} flex items-center justify-center gap-2`}>
+                    <Download aria-hidden="true" className="size-4" />
+                    Download
+                  </a>
+                </div>
+                {tryOnError && <p role="alert" className="mt-3 rounded-lg bg-red-950/60 px-3 py-2 text-xs text-red-200">{tryOnError}</p>}
+              </>
+            ) : (
+              <div className="space-y-4">
+                <input
+                  ref={tryOnFileRef}
+                  type="file"
+                  accept="image/jpeg,image/png,image/webp"
+                  className="hidden"
+                  onChange={chooseTryOnPhoto}
+                />
+                {tryOnPreview ? (
+                  <div className="flex items-center gap-3 rounded-xl border border-[#2d3045] bg-[#171927] p-3">
+                    <Image src={tryOnPreview} alt="Selected photo preview" width={80} height={80} unoptimized className="size-20 shrink-0 rounded-lg bg-[#0b0c14] object-cover" />
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-sm font-semibold">{tryOnFile?.name}</p>
+                      <p className="mt-1 text-xs text-[#9a9a90]">{((tryOnFile?.size ?? 0) / (1024 * 1024)).toFixed(2)} MB</p>
+                    </div>
+                    <button type="button" onClick={() => tryOnFileRef.current?.click()} className={`${btn} shrink-0 px-3 py-2 text-xs`}>
+                      Change photo
+                    </button>
+                  </div>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => tryOnFileRef.current?.click()}
+                    className="flex min-h-40 w-full flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed border-[#45475b] bg-[#171927] px-4 py-6 text-center transition hover:border-[#8d4bff]"
+                  >
+                    <Upload aria-hidden="true" className="size-6 text-[#b58aff]" />
+                    <span className="text-sm font-semibold">Upload your photo</span>
+                    <span className="text-xs text-[#9a9a90]">JPG, PNG, or WebP · Max 5 MB</span>
+                  </button>
+                )}
+                <label className="flex items-start gap-2.5 rounded-xl border border-[#2d3045] bg-[#171927] p-3 text-xs leading-relaxed text-[#c8c9d8]">
+                  <input
+                    type="checkbox"
+                    checked={tryOnConsent}
+                    onChange={(event) => setTryOnConsent(event.target.checked)}
+                    className="mt-0.5 size-4 shrink-0 accent-[#8d4bff]"
+                  />
+                  <span>Main apni photo AI se process karne ki permission deta hoon.</span>
+                </label>
+                {tryOnError && <p role="alert" className="rounded-lg bg-red-950/60 px-3 py-2 text-xs text-red-200">{tryOnError}</p>}
+                <p className="text-[11px] leading-relaxed text-[#8f91a5]">Your photo is only processed for this request and is not saved by this app.</p>
+                <button
+                  type="button"
+                  onClick={() => void generateTryOn()}
+                  disabled={!tryOnFile || !tryOnConsent || tryOnBusy}
+                  className={`${btnPri} flex w-full items-center justify-center gap-2 disabled:cursor-not-allowed disabled:opacity-50`}
+                >
+                  {tryOnBusy ? <LoaderCircle aria-hidden="true" className="size-4 animate-spin" /> : <Sparkles aria-hidden="true" className="size-4" />}
+                  {tryOnBusy ? "Generating..." : "Generate"}
+                </button>
+              </div>
+            )}
+          </section>
+        </div>
+      )}
 
       <div
         className={`pointer-events-none fixed bottom-6 left-1/2 z-50 -translate-x-1/2 rounded-full bg-[#111] px-4 py-2.5 text-[13px] text-white transition ${
